@@ -1,0 +1,36 @@
+# Standalone configuration for a private, local evaluation.
+# Do not combine this file with compose.yaml or expose its HTTP port publicly.
+name: harbor-local
+services:
+  app:
+    build: .
+    image: ${HARBOR_IMAGE:-harbor-files:local}
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: development
+      HOST: 0.0.0.0
+      PORT: 3000
+      APP_ORIGIN: ${LOCAL_ORIGIN:-http://localhost:3000}
+      DATA_DIR: /data
+      STORAGE_ROOT: /storage
+      MAX_UPLOAD_BYTES: "10737418240"
+      MAX_STORAGE_BYTES: "107374182400"
+    ports:
+      - "127.0.0.1:${LOCAL_PORT:-3000}:3000"
+    volumes:
+      - local_data:/data
+      - local_storage:/storage
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    pids_limit: 100
+    stop_grace_period: 30s
+volumes:
+  local_data:
+  local_storage:

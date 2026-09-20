@@ -1,0 +1,76 @@
+name: harbor
+
+services:
+  app:
+    build: .
+    image: harbor-files:local
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATA_DIR: /data
+      STORAGE_ROOT: /storage
+      APP_ORIGIN: https://${HARBOR_DOMAIN:?Set HARBOR_DOMAIN in .env}
+      TRUST_PROXY: "true"
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10737418240}
+      MAX_STORAGE_BYTES: ${MAX_STORAGE_BYTES:-107374182400}
+      MAX_CONCURRENT_UPLOADS: ${MAX_CONCURRENT_UPLOADS:-4}
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+    volumes:
+      - ${DATA_PATH:?Set DATA_PATH in .env}:/data
+      - ${STORAGE_PATH:?Set STORAGE_PATH in .env}:/storage
+    expose:
+      - "3000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 1g
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      HARBOR_DOMAIN: ${HARBOR_DOMAIN:?Set HARBOR_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:

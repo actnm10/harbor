@@ -1,0 +1,13 @@
+*
+!package.json
+!server.js
+!lib.js
+!admin.js
+!settings.js
+!storage.js
+!preview.js
+!preview-worker.js
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!public/
+!public/**

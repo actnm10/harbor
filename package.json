@@ -1,0 +1,24 @@
+{
+  "name": "harbor-files",
+  "version": "0.1.0-alpha",
+  "private": true,
+  "type": "module",
+  "description": "A personal, self-hosted file library",
+  "engines": {
+    "node": ">=24.15.0 <25"
+  },
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "admin": "node admin.js",
+    "vendor": "node scripts/vendor.mjs"
+  },
+  "dependencies": {
+    "word-extractor": "1.0.4",
+    "yauzl": "3.4.0"
+  },
+  "devDependencies": {
+    "pdfjs-dist": "6.3.289"
+  }
+}

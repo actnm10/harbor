@@ -1,0 +1,12 @@
+{
+    email {$ACME_EMAIL}
+}
+
+{$HARBOR_DOMAIN} {
+    encode zstd gzip
+    header Strict-Transport-Security "max-age=31536000"
+    reverse_proxy app:3000 {
+        # Replace any client-supplied value; Harbor trusts only this header.
+        header_up X-Real-IP {remote_host}
+    }
+}
