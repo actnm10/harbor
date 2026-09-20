@@ -70,7 +70,7 @@ docker compose build --pull app
 docker compose run --rm --no-deps app node admin.js init
 ```
 
-The account command prompts for a username and a password without displaying the password. Use a unique passphrase of at least 15 characters. There are no default credentials and no web setup endpoint that someone else can claim. Passwords are hashed; they are not stored in `.env` or the Docker image.
+The account command prompts for a username and a password without displaying the password, dots, or asterisks. Press Enter after each entry. Use a unique passphrase of at least 15 characters. At any prompt, Ctrl+C cancels setup without creating an account. There are no default credentials and no web setup endpoint that someone else can claim. Passwords are hashed; they are not stored in `.env` or the Docker image.
 
 ## 4. Start Harbor
 
@@ -211,6 +211,8 @@ Default development address: `http://localhost:3000`. Runtime environment variab
 
 | Symptom | Check |
 | --- | --- |
+| Original 0.1alpha account setup appears stuck after `Container ... Created` | That release can erase its username prompt while still waiting for input. Type your chosen username and press Enter to reach the password prompt, or update `admin.js` from `main` and rebuild the app image. The fix also removes the unsettled-await warning when cancelling. |
+| `app` is unhealthy and Caddy cannot start | Read `docker compose logs --tail=80 app` and `docker inspect --format '{{json .State.Health}}' harbor-app-1`. Account creation does not validate the server settings or `/storage` write access; use the logged error to identify which check failed. The health check uses internal HTTP and does not depend on public DNS or HTTPS. |
 | App cannot write storage | Both paths exist and are writable as UID/GID 1000 inside the guest; inspect bind-mount UID mapping. |
 | Storage marker or mount error | Restore the correct mounted directory, including hidden `.harbor-location.json` markers. Do not erase markers or initialize a replacement over missing data. |
 | Word or PDF preview unavailable | Check format and size limits; encrypted, damaged, or unsupported documents remain downloadable. |

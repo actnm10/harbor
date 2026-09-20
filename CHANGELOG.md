@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Keep the account setup username prompt visible when readline redraws the terminal.
+- Exit account setup and password recovery cleanly on Ctrl+C or end of input, with terminal state restored and no unsettled-await warning.
+
 ## 0.1alpha
 
 Initial alpha release. Package version: `0.1.0-alpha`.

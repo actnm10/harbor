@@ -29,6 +29,8 @@ Covered behaviors include:
 
 The interactive account setup was also exercised in a disposable directory: it creates an owner successfully and hides password entry. JavaScript syntax checks and the backup script's shell syntax check pass.
 
+A follow-up Linux Docker PTY regression run verified the account-prompt fix after the initial `0.1alpha` release. All 13 checks passed in 16.87 seconds: the username prompt remains visible after actual terminal cursor/erase operations, valid setup creates exactly one owner without echoing passwords, Ctrl+C and Ctrl+D at every setup prompt exit cleanly without creating an owner, mismatched passwords make no changes, and password-reset cancellation works at both hidden prompts. The original script reproduced the erased username prompt as a negative control. Tests used disposable read-only containers with temporary-memory storage, no published ports, and no live volumes. A separate Windows terminal check also confirmed the visible prompt and clean Ctrl+C exit. The application syntax check passes.
+
 ## Browser checks
 
 Verified in the local Chromium-based browser using disposable test data:
