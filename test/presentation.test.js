@@ -108,6 +108,13 @@ test('presentation PDF endpoint authenticates requests and rechecks sessions aft
   assert.equal(good.headers.get('cache-control'), 'no-store');
   assert.deepEqual(Buffer.from(await good.arrayBuffer()), PDF);
   hold = true;
+  const trashStart = new Promise(resolve => { started = resolve; });
+  const trashedPreview = fetch(route, { headers: { Cookie: cookie } });
+  await trashStart;
+  const mutationHeaders = { Cookie: cookie, Origin: 'http://localhost', 'X-CSRF-Token': session.csrfToken, 'Content-Type': 'application/json' };
+  assert.equal((await fetch(base + `/api/files/${item.id}`, { method: 'DELETE', headers: mutationHeaders })).status, 204);
+  release(); assert.equal((await trashedPreview).status, 404);
+  assert.equal((await fetch(base + '/api/trash/restore', { method: 'POST', headers: mutationHeaders, body: JSON.stringify({ ids: [item.id] }) })).status, 200);
   const pendingStart = new Promise(resolve => { started = resolve; });
   const pending = fetch(route, { headers: { Cookie: cookie } });
   await pendingStart;

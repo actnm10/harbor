@@ -1,4 +1,4 @@
-# Harbor 0.1alpha
+# Harbor 0.1.5-alpha
 
 A personal file library you host yourself. One administrator account, a responsive web interface, folders, drag-and-drop uploads with progress, downloads, document and image previews, and browser-native audio/video playback.
 
@@ -9,7 +9,8 @@ Harbor runs as one Node.js 24 process with SQLite metadata and files on disk. Do
 - A private library protected by a login; no public registration or shared links.
 - Folders and breadcrumbs, global search, media filters, sorting, and grid/list views.
 - Multiple file uploads with progress, cancellation, and retry.
-- Rename and download; permanent deletion requires confirmation in the interface.
+- Rename, move, copy, and select multiple items for bulk actions; upload folder trees and download selections as ZIP archives.
+- A recycle bin with restore, permanent deletion, and configurable retention (30 days by default).
 - Images and audio/video previews with seeking. Playback depends on browser codec support.
 - Text and Word document previews, plus a PDF viewer with page navigation, zoom, and text view.
 - Excel worksheet previews and PowerPoint slide previews with the optional local renderer.
@@ -18,7 +19,7 @@ Harbor runs as one Node.js 24 process with SQLite metadata and files on disk. Do
 - An owner password change screen and an offline password recovery command.
 - An Administration menu for upload limits, storage quota, session duration, and storage locations.
 
-This version is for one owner, who is an administrator. Server-side admin permissions prepare for a future multiuser release; account creation and separate user libraries are not included yet. It also does not include desktop synchronization, public sharing, version history, a recycle bin, directory uploads, video transcoding, or antivirus scanning. Unsupported previews remain downloadable. HTML and SVG files are downloads only; uploaded content is never injected as application HTML.
+This version is for one owner, who is an administrator. Server-side admin permissions prepare for a future multiuser release; account creation and separate user libraries are not included yet. It does not include desktop synchronization, public sharing, version history, video transcoding, or antivirus scanning. Unsupported previews remain downloadable. HTML and SVG files are downloads only; uploaded content is never injected as application HTML.
 
 ## 1. Prepare your Proxmox guest
 
@@ -87,7 +88,22 @@ docker compose logs --tail=100 app caddy
 
 Open `https://files.your-domain.com` using the hostname you configured, and sign in with the account you just created. The first library is empty. Create a folder or drop files into the browser to begin.
 
-Renaming a file to an existing name is rejected. Uploading a duplicate name is also rejected so an upload does not silently overwrite your data. Deleting a folder permanently deletes its contents.
+Renaming, moving, copying, or uploading to an existing name is rejected so an operation does not silently overwrite your data. Deleting a folder moves it and its contents to the recycle bin.
+
+## Upgrade to 0.1.5-alpha
+
+From your existing Harbor directory, make a backup before upgrading, then rebuild the app:
+
+```sh
+sh deploy/backup.sh
+git pull --ff-only
+docker compose up -d --build app
+docker compose ps
+```
+
+Keep your existing `.env`, storage mounts, and reverse-proxy configuration. Startup migrates the existing database automatically; your account and active files stay in place. Files permanently deleted before this upgrade cannot be recovered by the new recycle bin. To roll back to an older version, restore the matching pre-upgrade backup rather than opening the migrated database with old application code.
+
+Install the matching Android 0.1.5-alpha APK to enable native ZIP downloads. It can update the earlier test APK when signed with the same development certificate. Browser clients receive the new file controls on refresh.
 
 ## Try it privately first
 
@@ -114,6 +130,20 @@ To use another local port, set `LOCAL_PORT` and a matching `LOCAL_ORIGIN` (for e
 Search covers the entire library. Media categories also show matching files across folders. Uploads go into the active folder; from a global category they go to My files. Multi-file uploads are individual operations, so completed files remain saved if another file fails. An interrupted file must be retried from the beginning.
 
 Harbor sends audio/video byte ranges so your browser can seek without downloading the entire file first. MP4/H.264, WebM, MP3, and other browser-supported formats generally work; the exact combination depends on your device. A `.mov` or `.mkv` file may require downloading and playing in another application. Harbor does not convert video. Large images are served at their original resolution; this version does not generate smaller thumbnails.
+
+### Recycle bin and file organization
+
+Use an item's menu to move or copy it, or select multiple items and use the bulk toolbar. A batch can select up to 100 items; selecting a folder also includes its descendants. Operations are bounded to 10,000 entries and 64 folder levels. Moves keep the same stored content; copies create independent files in the currently selected storage location and consume additional quota. Name conflicts stop a move or copy before it replaces anything.
+
+Deleting moves files or folder trees into **Recycle bin**. Retained content stays on disk and counts toward the storage quota. Restore returns an item to its original folder when that folder is available; otherwise it returns to My files. If a name is already occupied, Harbor adds a numbered restored suffix. Deleting a parent later does not permanently remove a child that was already independently placed in the bin.
+
+The default retention is 30 days. Administrators can set **Recycle bin retention** to 1–365 days. Expired items are permanently cleaned up while Harbor is running and after startup. Lowering retention can make existing bin contents eligible for deletion. **Delete permanently** and **Empty recycle bin** require confirmation and cannot be undone in the application. If a storage operation fails after permanent cleanup begins, Harbor keeps the deletion record for retry; that item can no longer be restored.
+
+Use folder upload to preserve a selected directory's subfolders, or drag a folder into a supported desktop browser. Folder uploads consist of individual uploads: completed files remain saved if another fails, and existing files are never overwritten. Browser and phone file pickers differ in folder-selection support. Download a folder or selected items as a ZIP archive; generation streams directly from storage without creating a second archive on the server. ZIP downloads are not compressed and can be larger than their source files because they include archive metadata. Keep Android Harbor open until a transfer finishes.
+
+ZIP paths must be portable: rename items containing characters such as `:`, `?`, or `*`, Windows device names such as `CON`, or names ending in a dot or space before archiving them. Case-insensitive or Unicode-equivalent archive path collisions also require renaming or separate downloads. Harbor reports these problems before starting the archive rather than omitting files.
+
+The recycle bin is not a backup. It cannot recover files deleted before this feature was installed, a lost disk, or items already permanently removed. Continue backing up the database and all storage locations together.
 
 ### Documents and appearance
 
@@ -229,7 +259,7 @@ The application uses scrypt password hashing, random session cookies with server
 
 The reverse proxy overwrites `X-Real-IP` before it reaches the app. `TRUST_PROXY=true` is appropriate only when app traffic must come through that trusted proxy. If you replace Caddy, preserve that behavior and keep the app inaccessible directly. These choices follow [OWASP's session guidance](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html) and [file upload guidance](https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html).
 
-Harbor 0.1alpha is an early development release and has not received an independent security audit. It has no MFA, malware scanning, or encryption at rest. Use storage encryption if you need protection against offline disk access. Keep the guest, Node image, and Caddy patched. Run only one app instance against a data directory; horizontal replicas are not supported.
+Harbor 0.1.5-alpha is an early development release and has not received an independent security audit. It has no MFA, malware scanning, or encryption at rest. Use storage encryption if you need protection against offline disk access. Keep the guest, Node image, and Caddy patched. Run only one app instance against a data directory; horizontal replicas are not supported.
 
 ## Development
 

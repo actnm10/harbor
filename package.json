@@ -1,6 +1,6 @@
 {
   "name": "harbor-files",
-  "version": "0.1.0-alpha",
+  "version": "0.1.5-alpha",
   "private": true,
   "type": "module",
   "description": "A personal, self-hosted file library",

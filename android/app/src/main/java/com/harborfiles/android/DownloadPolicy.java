@@ -13,8 +13,10 @@ import java.util.regex.Pattern;
 
 /** Boundaries for native authenticated downloads; filenames are display names, never paths. */
 public final class DownloadPolicy {
+    private static final String UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
     private static final Pattern CONTENT_PATH = Pattern.compile(
-            "/api/files/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/content");
+            "/api/files/" + UUID + "/content");
+    private static final Pattern ARCHIVE_QUERY = Pattern.compile("ids=" + UUID + "(?:," + UUID + "){0,99}&download=1");
 
     private DownloadPolicy() {}
 
@@ -23,8 +25,17 @@ public final class DownloadPolicy {
             throw new IllegalArgumentException("Downloads must come from the connected Harbor server.");
         }
         URI uri = ServerOrigin.networkUri(address);
-        if (!CONTENT_PATH.matcher(uri.getRawPath()).matches()
-                || !"download=1".equals(uri.getRawQuery()) || uri.getRawFragment() != null) {
+        String path = uri.getRawPath();
+        String query = uri.getRawQuery();
+        boolean file = CONTENT_PATH.matcher(path).matches() && "download=1".equals(query);
+        boolean archive = "/api/archive".equals(path) && query != null && ARCHIVE_QUERY.matcher(query).matches();
+        if (archive) {
+            java.util.HashSet<String> ids = new java.util.HashSet<>();
+            for (String id : query.substring(4, query.length() - "&download=1".length()).split(",")) {
+                if (!ids.add(id.toLowerCase(java.util.Locale.ROOT))) archive = false;
+            }
+        }
+        if ((!file && !archive) || uri.getRawFragment() != null) {
             throw new IllegalArgumentException("This is not a Harbor file download link.");
         }
         try { return uri.toURL(); }

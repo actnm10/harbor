@@ -2,7 +2,7 @@
 
 (() => {
   const $ = id => document.getElementById(id);
-  const titles = { all: 'All files', image: 'Photos', video: 'Videos', audio: 'Audio', documents: 'Documents' };
+  const titles = { all: 'All files', image: 'Photos', video: 'Videos', audio: 'Audio', documents: 'Documents', trash: 'Recycle bin' };
   const imageTypes = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif', 'image/bmp']);
   const documentExtensions = new Set(['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'xml', 'yaml', 'yml', 'log', 'ini', 'conf', 'cfg', 'js', 'ts', 'css', 'py', 'sh', 'c', 'h', 'cpp', 'java', 'sql', 'doc', 'docx', 'pdf', 'xls', 'xlsx', 'ppt', 'pptx']);
   const spreadsheetExtensions = new Set(['xls', 'xlsx', 'xlsm', 'xlsb', 'xlt', 'xltx', 'xltm', 'csv', 'tsv', 'ods', 'ots']);
@@ -33,6 +33,13 @@
   let authCooldownTimer = null;
   let dialogIsPassword = false;
   let dialogSubmitLabel = 'Save';
+  const selected = new Set();
+  let retentionDays = 30;
+  let destination = null;
+  let destinationController = null;
+  let destinationGeneration = 0;
+  let collectingFiles = false;
+  let uploadPage = 0;
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -182,7 +189,10 @@
     if (method !== 'GET' && method !== 'HEAD' && path !== '/api/login') headers['X-CSRF-Token'] = state.csrf;
     let response;
     try {
-      response = await fetch(path, { ...options, method, headers, credentials: 'same-origin', body: options.body === undefined ? undefined : JSON.stringify(options.body), signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) });
+      const { timeoutMs = 30000, ...fetchOptions } = options;
+      const timeout = timeoutMs ? AbortSignal.timeout(timeoutMs) : null;
+      const signal = options.signal && timeout ? AbortSignal.any([options.signal, timeout]) : options.signal || timeout || undefined;
+      response = await fetch(path, { ...fetchOptions, method, headers, credentials: 'same-origin', body: options.body === undefined ? undefined : JSON.stringify(options.body), signal });
     } catch (error) {
       if (error.name === 'AbortError') throw error;
       throw new Error(error.name === 'TimeoutError' ? 'The server took too long to respond. Please try again.' : 'Couldn’t reach your server. Check your connection and try again.');
@@ -216,6 +226,9 @@
   function showLogin(message = '') {
     authEpoch++;
     csrfRefresh = null;
+    selected.clear();
+    closeDestination();
+    collectingFiles = false;
     dialogIsPassword = false;
     cleanPreview();
     adminController?.abort();
@@ -245,6 +258,7 @@
       upload.xhr?.abort();
     }
     state.uploads = [];
+    uploadPage = 0;
     renderUploads();
     history.replaceState(null, '', location.pathname + location.search);
     $('boot').hidden = true;
@@ -257,6 +271,11 @@
     $('username').value = '';
     $('password').value = '';
     $('file-input').value = '';
+    $('folder-input').value = '';
+    $('selection-bar').hidden = true;
+    $('selected-count').textContent = '';
+    $('bulk-download').removeAttribute('href');
+    $('trash-notice').hidden = true;
     $('account-name').textContent = 'Owner';
     $('account-role').textContent = 'Personal account';
     $('avatar').textContent = 'H';
@@ -350,6 +369,7 @@
     const type = Object.hasOwn(titles, params.get('type')) ? params.get('type') : 'all';
     const q = (params.get('q') || '').slice(0, 255);
     state.route = { parent: params.get('folder') || 'root', type, q };
+    selected.clear();
     if ($('search').value !== q) $('search').value = q;
     document.querySelectorAll('.nav-item').forEach(link => {
       const selected = link.dataset.type === type;
@@ -373,13 +393,16 @@
     $('load-error').hidden = true;
     $('files-loading').hidden = false;
     $('item-count').textContent = '';
+    renderSelection();
     const { parent, type, q } = state.route;
     updateTitle();
     try {
       const params = new URLSearchParams({ parent, type, q });
-      const result = await api('/api/files?' + params, { signal: controller.signal });
+      const result = await api(isTrash() ? '/api/trash' : '/api/files?' + params, { signal: controller.signal });
       if (controller !== state.loadController || !state.user) return;
-      state.items = result.items || [];
+      state.items = (result.items || []).filter(item => !isTrash() || !q || item.name.toLocaleLowerCase().includes(q.toLocaleLowerCase()));
+      for (const id of selected) if (!state.items.some(item => item.id === id)) selected.delete(id);
+      if (isTrash()) retentionDays = result.retentionDays || 30;
       state.breadcrumbs = result.breadcrumbs || [];
       state.loading = false;
       updateStats(result.stats || {});
@@ -403,12 +426,13 @@
   }
 
   function isGlobal() { return state.route.type !== 'all' || !!state.route.q; }
+  function isTrash() { return state.route.type === 'trash'; }
   function uploadParent() { return isGlobal() ? 'root' : state.route.parent; }
   function destinationName() { return isGlobal() ? 'My files' : currentFolderName(); }
 
   function updateTitle() {
     const { type, q, parent } = state.route;
-    const title = q ? 'Search results' : type !== 'all' ? titles[type] : parent === 'root' ? 'All files' : currentFolderName();
+    const title = isTrash() ? 'Recycle bin' : q ? 'Search results' : type !== 'all' ? titles[type] : parent === 'root' ? 'All files' : currentFolderName();
     $('page-title').replaceChildren(document.createTextNode(title), element('span', 'title-dot', '.'));
     $('page-subtitle').textContent = q ? 'Matches for “' + q + '” across your entire library.' : type !== 'all' ? 'A collection from across your entire library.' : parent === 'root' ? 'Everything you need, right where you left it.' : 'A little order for the things you keep.';
     $('section-title').textContent = q ? 'Matching files & folders' : type === 'all' ? 'Your files' : 'Your ' + titles[type].toLowerCase();
@@ -416,6 +440,13 @@
     $('upload-button').title = 'Upload to ' + destinationName();
     $('new-folder').title = 'Create a folder in ' + destinationName();
     $('drop-zone').querySelector('strong').textContent = isGlobal() ? 'New uploads go to My files.' : 'A place for whatever comes next.';
+    for (const id of ['new-folder', 'upload-button', 'upload-folder', 'drop-zone']) $(id).hidden = isTrash();
+    $('empty-trash').hidden = !isTrash();
+    $('trash-notice').hidden = !isTrash();
+    $('trash-notice-text').textContent = 'Items are kept for ' + retentionDays + ' days and still use storage. Restore them to open or download them.';
+    $('search').placeholder = isTrash() ? 'Search the recycle bin…' : 'Search all your files…';
+    $('search').setAttribute('aria-label', isTrash() ? 'Search the recycle bin' : 'Search all files');
+    if (isTrash()) { $('page-subtitle').textContent = 'A second chance for the things you let go.'; $('section-title').textContent = 'Deleted items'; }
     document.title = title + ' · Harbor';
   }
 
@@ -446,14 +477,16 @@
     $('count-image').textContent = stats.imageCount || 0;
     $('count-video').textContent = stats.videoCount || 0;
     $('count-audio').textContent = stats.audioCount || 0;
+    $('count-trash').textContent = stats.trashCount || 0;
+    $('storage-trash').textContent = stats.trashBytes ? bytes(stats.trashBytes) + ' in the recycle bin' : '';
   }
 
   function sortedItems() {
     const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
     return [...state.items].sort((a, b) => {
       if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
-      if (state.sort === 'newest') return new Date(b.updatedAt) - new Date(a.updatedAt) || collator.compare(a.name, b.name);
-      if (state.sort === 'oldest') return new Date(a.updatedAt) - new Date(b.updatedAt) || collator.compare(a.name, b.name);
+      if (state.sort === 'newest') return new Date(b.deletedAt || b.updatedAt) - new Date(a.deletedAt || a.updatedAt) || collator.compare(a.name, b.name);
+      if (state.sort === 'oldest') return new Date(a.deletedAt || a.updatedAt) - new Date(b.deletedAt || b.updatedAt) || collator.compare(a.name, b.name);
       if (state.sort === 'size') return Number(b.size || 0) - Number(a.size || 0) || collator.compare(a.name, b.name);
       return collator.compare(a.name, b.name);
     });
@@ -474,27 +507,50 @@
     const holder = $('files');
     holder.replaceChildren();
     holder.className = state.view === 'list' ? 'file-list' : 'file-grid';
+    holder.classList.toggle('trash-view', isTrash());
     holder.hidden = !state.items.length;
     $('list-heading').hidden = state.view !== 'list' || !state.items.length;
     $('empty-state').hidden = !!state.items.length;
     $('item-count').textContent = state.items.length + (state.items.length === 1 ? ' item' : ' items');
+    renderSelection();
+    $('empty-trash').disabled = !Number($('count-trash').textContent);
+    $('list-date-heading').textContent = isTrash() ? 'Deleted' : 'Modified';
     if (!state.items.length) {
       const filtered = isGlobal();
       $('empty-title').textContent = state.route.q ? 'Nothing by that name, yet.' : state.route.type !== 'all' ? 'Your ' + titles[state.route.type].toLowerCase() + ' will feel at home here.' : state.route.parent !== 'root' ? 'A fresh little space.' : 'Your space starts here.';
       $('empty-description').textContent = state.route.q ? 'Try another search, or return to all your files.' : state.route.type !== 'all' ? 'Upload files and they’ll appear here automatically when their format matches this collection.' : 'Bring your photos, documents, and big ideas. Upload your first file to make yourself at home.';
       $('empty-action').replaceChildren(icon(state.route.q ? 'folder' : 'upload'), element('span', '', state.route.q ? 'Back to all files' : filtered ? 'Upload files' : 'Upload your first file'));
+      if (isTrash()) {
+        $('empty-title').textContent = state.route.q ? 'No deleted items match.' : 'A clean slate.';
+        $('empty-description').textContent = state.route.q ? 'Try another search in the recycle bin.' : 'Files you remove from your library will appear here until you restore or permanently delete them.';
+        $('empty-action').replaceChildren(icon('folder'), element('span', '', 'Back to all files'));
+      }
       return;
     }
     const fragment = document.createDocumentFragment();
     for (const item of sortedItems()) {
       const kind = classify(item);
       const card = element('article', 'file-card kind-' + kind);
+      card.classList.toggle('is-selected', selected.has(item.id));
+      const selection = element('label', 'file-select');
+      const checkbox = element('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = selected.has(item.id);
+      checkbox.setAttribute('aria-label', 'Select ' + item.name);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked && selected.size >= 100) { checkbox.checked = false; toast('Select up to 100 items at a time.', true); return; }
+        if (checkbox.checked) selected.add(item.id); else selected.delete(item.id);
+        card.classList.toggle('is-selected', checkbox.checked);
+        renderSelection();
+      });
+      selection.append(checkbox);
       const open = element('button', 'file-open');
       open.type = 'button';
       open.setAttribute('aria-label', (item.kind === 'folder' ? 'Open folder ' : 'Preview ' + fileKindLabels[kind].toLowerCase() + ' ') + item.name);
-      open.addEventListener('click', () => item.kind === 'folder' ? navigate(item.id) : openPreview(item));
+      if (isTrash()) { open.disabled = true; open.setAttribute('aria-label', item.name + ' — restore to open'); }
+      else open.addEventListener('click', () => item.kind === 'folder' ? navigate(item.id) : openPreview(item));
       const visual = element('div', 'file-visual');
-      if (kind === 'image') {
+      if (kind === 'image' && !isTrash()) {
         const image = element('img');
         image.src = contentUrl(item);
         image.alt = '';
@@ -514,10 +570,11 @@
       name.title = item.name;
       const meta = element('span', 'file-meta');
       const size = element('span', 'file-size', item.kind === 'folder' ? 'Folder' : bytes(item.size));
-      const modified = element('span', 'file-date', date(item.updatedAt));
-      modified.title = new Date(item.updatedAt).toLocaleString();
+      const modified = element('span', 'file-date', (isTrash() ? 'Deleted ' : '') + date(item.deletedAt || item.updatedAt));
+      modified.title = new Date(item.deletedAt || item.updatedAt).toLocaleString();
       meta.append(size, element('span', 'meta-dot'), modified);
       info.append(name, meta);
+      if (isTrash()) { const path = element('span', 'file-original-path', item.originalPath || 'My files'); path.title = path.textContent; info.append(path); }
       open.append(visual, info);
       const menu = element('details', 'file-menu');
       const summary = element('summary');
@@ -526,21 +583,31 @@
       summary.append(icon('more'));
       const panel = element('div', 'file-menu-panel');
       const closeAnd = fn => () => { menu.open = false; fn(); };
-      if (item.kind === 'file') {
+      if (!isTrash()) {
         const download = element('a');
-        download.href = contentUrl(item, true);
-        download.download = item.name;
-        download.append(icon('download'), document.createTextNode('Download'));
+        download.href = item.kind === 'folder' ? archiveUrl([item.id]) : contentUrl(item, true);
+        download.download = item.name + (item.kind === 'folder' ? '.zip' : '');
+        download.append(icon('download'), document.createTextNode(item.kind === 'folder' ? 'Download ZIP' : 'Download'));
         download.addEventListener('click', () => { menu.open = false; });
+        if (item.kind === 'folder') download.addEventListener('click', event => prepareArchive(event, download, [item.id]));
         panel.append(download);
       }
-      panel.append(menuAction('Rename', 'edit', closeAnd(() => renameItem(item))));
-      panel.append(menuAction('Delete', 'trash', closeAnd(() => deleteItem(item)), 'delete-action'));
+      if (isTrash()) {
+        const restore = menuAction(item.purging ? 'Deletion in progress' : 'Restore', 'refresh', closeAnd(() => restoreItems([item])));
+        restore.disabled = !!item.purging;
+        panel.append(restore);
+        panel.append(menuAction('Delete forever', 'trash', closeAnd(() => purgeItems([item])), 'delete-action'));
+      } else {
+        panel.append(menuAction('Move', 'folder', closeAnd(() => openDestination('move', [item]))));
+        panel.append(menuAction('Copy', 'file', closeAnd(() => openDestination('copy', [item]))));
+        panel.append(menuAction('Rename', 'edit', closeAnd(() => renameItem(item))));
+        panel.append(menuAction('Move to recycle bin', 'trash', closeAnd(() => deleteItem(item)), 'delete-action'));
+      }
       menu.append(summary, panel);
       menu.addEventListener('toggle', () => {
         if (menu.open) document.querySelectorAll('.file-menu[open], .account-menu[open]').forEach(other => { if (other !== menu) other.open = false; });
       });
-      card.append(open, menu);
+      card.append(open, selection, menu);
       fragment.append(card);
     }
     holder.append(fragment);
@@ -637,11 +704,156 @@
   }
 
   function deleteItem(item) {
-    openDialog({ title: item.kind === 'folder' ? 'Delete this folder?' : 'Delete this file?', description: 'Permanently delete “' + item.name + '”' + (item.kind === 'folder' ? ', including every file and subfolder inside' : '') + '? This cannot be undone.', iconName: 'trash', danger: true, submit: 'Delete permanently', onSubmit: async () => {
-      await api('/api/files/' + encodeURIComponent(item.id), { method: 'DELETE' });
-      toast(item.kind === 'folder' ? 'Folder and its contents deleted.' : 'File deleted.');
-      await loadFiles();
-    } });
+    trashItems([item]);
+  }
+
+  function archiveUrl(ids) { return '/api/archive?ids=' + ids.join(',') + '&download=1'; }
+  async function prepareArchive(event, link, ids) {
+    event.preventDefault();
+    if (!ids.length || link.getAttribute('aria-busy') === 'true') return;
+    const epoch = authEpoch;
+    const url = archiveUrl(ids);
+    link.setAttribute('aria-busy', 'true');
+    link.setAttribute('aria-disabled', 'true');
+    try {
+      await api(url, { method: 'HEAD', timeoutMs: 0 });
+      if (epoch !== authEpoch || !state.user) return;
+      const download = element('a');
+      download.href = url; download.download = '';
+      document.body.append(download); download.click(); download.remove();
+      toast('Your ZIP download is starting. Large folders may take a while.');
+    } catch (error) { if (epoch === authEpoch && state.user) toast(error.message, true); }
+    finally { link.removeAttribute('aria-busy'); link.removeAttribute('aria-disabled'); }
+  }
+  function selectedItems() { return state.items.filter(item => selected.has(item.id)); }
+  function renderSelection() {
+    $('selection-bar').hidden = !selected.size;
+    $('selected-count').textContent = selected.size + ' selected · 100 maximum';
+    $('select-all').disabled = !state.items.length || state.loading;
+    $('select-all').textContent = state.items.length > 100 ? 'Select first 100' : 'Select all';
+    for (const id of ['bulk-download', 'bulk-move', 'bulk-copy', 'bulk-trash']) $(id).hidden = isTrash();
+    for (const id of ['bulk-restore', 'bulk-purge']) $(id).hidden = !isTrash();
+    $('bulk-restore').disabled = selectedItems().some(item => item.purging);
+    if (selected.size && !isTrash()) $('bulk-download').href = archiveUrl([...selected]);
+    else $('bulk-download').removeAttribute('href');
+  }
+
+  function describeItems(items) { return items.length === 1 ? '“' + items[0].name + '”' : items.length + ' selected items'; }
+  async function completeFileAction(path, body, message) {
+    const epoch = authEpoch;
+    await api(path, { method: 'POST', body, timeoutMs: 0 });
+    if (epoch !== authEpoch || !state.user) return;
+    selected.clear();
+    toast(message);
+    await loadFiles();
+  }
+  function trashItems(items) {
+    if (!items.length) return;
+    const ids = items.map(item => item.id);
+    openDialog({ title: 'Move to the recycle bin?', description: describeItems(items) + (items.some(item => item.kind === 'folder') ? ', including all files and subfolders inside,' : '') + ' will stay in the recycle bin until restored or automatically removed. They still use storage.', iconName: 'trash', submit: 'Move to recycle bin', onSubmit: () => completeFileAction('/api/files/bulk', { action: 'trash', ids }, 'Moved to the recycle bin.') });
+  }
+  function restoreItems(items) {
+    if (!items.length) return;
+    openDialog({ title: 'Restore these items?', description: describeItems(items) + ' will return to the original folder, or My files if that folder is no longer available. Conflicting names are adjusted automatically.', iconName: 'refresh', submit: 'Restore', onSubmit: () => completeFileAction('/api/trash/restore', { ids: items.map(item => item.id) }, 'Items restored.') });
+  }
+  function purgeItems(items, empty = false) {
+    if (!empty && !items.length) return;
+    openDialog({ title: empty ? 'Empty the recycle bin?' : 'Delete forever?', description: 'Permanently delete ' + (empty ? 'every item in the recycle bin' : describeItems(items)) + ', including every file and subfolder inside? This cannot be undone.', iconName: 'trash', danger: true, submit: empty ? 'Empty recycle bin' : 'Delete forever', onSubmit: () => completeFileAction(empty ? '/api/trash/empty' : '/api/trash/purge', empty ? {} : { ids: items.map(item => item.id) }, 'Permanently deleted.') });
+  }
+
+  function closeDestination() {
+    destinationGeneration++;
+    destinationController?.abort();
+    destinationController = null;
+    destination = null;
+    $('destination-dialog').close();
+    for (const id of ['destination-folders', 'destination-crumbs']) $(id).replaceChildren();
+    for (const id of ['destination-description', 'destination-name', 'destination-error']) $(id).textContent = '';
+  }
+  function setDestinationBusy(busy) {
+    for (const id of ['destination-close', 'destination-cancel', 'destination-submit']) $(id).disabled = busy;
+    $('destination-folders').inert = busy;
+    $('destination-crumbs').inert = busy;
+    $('destination-dialog').setAttribute('aria-busy', String(busy));
+  }
+  function openDestination(action, items) {
+    if (!items.length) return;
+    closeDestination();
+    destination = { action, ids: items.map(item => item.id), folderIds: new Set(items.filter(item => item.kind === 'folder').map(item => item.id)), parent: 'root', name: 'My files', busy: false, ready: false, epoch: authEpoch };
+    setDestinationBusy(false);
+    $('destination-title').textContent = action === 'move' ? 'Move to a new home.' : 'Make a copy.';
+    $('destination-description').textContent = describeItems(items) + '. Existing files are never replaced.';
+    $('destination-submit').textContent = action === 'move' ? 'Move here' : 'Copy here';
+    $('destination-dialog').showModal();
+    $('destination-close').focus();
+    loadDestination('root');
+  }
+  async function loadDestination(parent) {
+    if (!destination || destination.busy) return;
+    destinationController?.abort();
+    destinationController = new AbortController();
+    const controller = destinationController;
+    const generation = ++destinationGeneration;
+    destination.parent = parent;
+    destination.ready = false;
+    $('destination-submit').disabled = true;
+    $('destination-loading').hidden = false;
+    $('destination-error').hidden = true;
+    $('destination-retry').hidden = true;
+    $('destination-folders').replaceChildren();
+    try {
+      const result = await api('/api/files?' + new URLSearchParams({ parent, type: 'all', q: '' }), { signal: controller.signal });
+      if (!destination || generation !== destinationGeneration || destination.epoch !== authEpoch) return;
+      const crumbs = result.breadcrumbs || [{ id: 'root', name: 'My files' }];
+      const forbidden = crumbs.some(crumb => destination.folderIds.has(crumb.id));
+      destination.ready = !forbidden;
+      destination.name = crumbs.map(crumb => crumb.name).join(' / ');
+      $('destination-name').textContent = destination.name;
+      $('destination-crumbs').replaceChildren();
+      for (const crumb of crumbs) {
+        const button = element('button', 'text-button', crumb.name);
+        button.type = 'button'; button.disabled = crumb.id === parent;
+        button.addEventListener('click', () => loadDestination(crumb.id));
+        $('destination-crumbs').append(button, icon('chevron'));
+      }
+      const folders = (result.items || []).filter(item => item.kind === 'folder');
+      for (const folder of folders) {
+        const button = menuAction(folder.name, 'folder', () => loadDestination(folder.id), 'destination-folder');
+        button.disabled = forbidden || destination.folderIds.has(folder.id);
+        if (button.disabled) button.title = 'An item cannot be placed inside itself.';
+        button.append(icon('chevron'));
+        $('destination-folders').append(button);
+      }
+      if (!folders.length) $('destination-folders').append(element('p', 'muted', 'No subfolders here. You can choose this folder.'));
+      if (forbidden) throw new Error('Choose a folder outside the items you selected.');
+      $('destination-submit').disabled = false;
+    } catch (error) {
+      if (error.name === 'AbortError' || generation !== destinationGeneration || !destination) return;
+      $('destination-error').textContent = error.message;
+      $('destination-error').hidden = false;
+      $('destination-retry').hidden = false;
+    } finally { if (generation === destinationGeneration) $('destination-loading').hidden = true; }
+  }
+  async function submitDestination() {
+    const operation = destination;
+    if (!operation?.ready || operation.busy) return;
+    operation.busy = true;
+    setDestinationBusy(true);
+    $('destination-error').hidden = true;
+    $('destination-submit').textContent = operation.action === 'copy' ? 'Copying…' : 'Moving…';
+    $('destination-description').textContent = 'Keep this page open while Harbor finishes. Large folders can take a while.';
+    try {
+      await api('/api/files/bulk', { method: 'POST', body: { action: operation.action, ids: operation.ids, parent: operation.parent }, timeoutMs: 0 });
+      if (destination !== operation || operation.epoch !== authEpoch) return;
+      const message = operation.action === 'copy' ? 'Copy complete.' : 'Move complete.';
+      closeDestination(); selected.clear(); toast(message); await loadFiles();
+    } catch (error) {
+      if (destination !== operation || operation.epoch !== authEpoch) return;
+      $('destination-error').textContent = error.message + (error.status ? '' : ' Check the destination before trying again; the server may still finish this operation.');
+      $('destination-error').hidden = false;
+    } finally {
+      if (destination === operation) { operation.busy = false; setDestinationBusy(false); $('destination-submit').textContent = operation.action === 'copy' ? 'Copy here' : 'Move here'; }
+    }
   }
 
   function changePassword() {
@@ -750,7 +962,7 @@
   }
 
   function adminDraft() {
-    return { quota: $('admin-quota').value, upload: $('admin-upload').value, unit: $('admin-upload-unit').value, concurrent: $('admin-concurrency').value, hours: $('admin-session-hours').value };
+    return { quota: $('admin-quota').value, upload: $('admin-upload').value, unit: $('admin-upload-unit').value, concurrent: $('admin-concurrency').value, hours: $('admin-session-hours').value, retention: $('admin-retention').value };
   }
 
   function renderAdmin(data, preservedDraft = null) {
@@ -772,6 +984,7 @@
     $('admin-concurrency').max = '64';
     $('admin-session-hours').value = String(settings.sessionHours);
     $('admin-session-hours').max = '720';
+    $('admin-retention').value = String(settings.trashRetentionDays || 30);
     if (preservedDraft) {
       $('admin-quota').value = preservedDraft.quota;
       $('admin-upload').value = preservedDraft.upload;
@@ -781,6 +994,7 @@
       $('admin-upload').min = String(1 / adminUploadUnit);
       $('admin-concurrency').value = preservedDraft.concurrent;
       $('admin-session-hours').value = preservedDraft.hours;
+      $('admin-retention').value = preservedDraft.retention;
     }
     $('admin-usage').textContent = bytes(data.storage.usedBytes) + ' in use' + (data.storage.reservedBytes ? ' + ' + bytes(data.storage.reservedBytes) + ' reserved by uploads' : '') + '. 1 GiB = 1,024 MiB.';
     $('admin-storage-root').textContent = data.storage.root;
@@ -850,10 +1064,12 @@
         maxUploadBytes: byteSetting('admin-upload', Number($('admin-upload-unit').value), 1099511627776, 'Maximum file size'),
         maxConcurrentUploads: Number($('admin-concurrency').value),
         sessionHours: Number($('admin-session-hours').value),
+        trashRetentionDays: Number($('admin-retention').value),
         activeStorageId: $('admin-storage-location').value
       };
       if (!Number.isInteger(payload.maxConcurrentUploads) || payload.maxConcurrentUploads < 1 || payload.maxConcurrentUploads > 64) throw new Error('Concurrent uploads must be a whole number from 1 to 64.');
       if (!Number.isInteger(payload.sessionHours) || payload.sessionHours < 1 || payload.sessionHours > 720) throw new Error('Session lifetime must be a whole number from 1 to 720 hours.');
+      if (!Number.isInteger(payload.trashRetentionDays) || payload.trashRetentionDays < 1 || payload.trashRetentionDays > 365) throw new Error('Recycle bin retention must be a whole number from 1 to 365 days.');
       setAdminBusy(true);
       $('admin-save').replaceChildren(element('span', 'spinner'), document.createTextNode('Saving…'));
       const result = await api('/api/admin/settings', { method: 'PATCH', body: payload });
@@ -910,17 +1126,88 @@
     renderUploads();
   }
 
-  function addFiles(files) {
-    if (!state.user || !files.length) return;
-    const parent = uploadParent();
-    for (const file of files) {
-      const tooLarge = file.size > state.limits.maxUploadBytes;
-      state.uploads.push({ id: ++uploadSequence, file, parent, destination: destinationName(), progress: 0, status: tooLarge ? 'failed' : 'queued', error: tooLarge ? 'This file exceeds the ' + bytes(state.limits.maxUploadBytes) + ' upload limit.' : '', xhr: null });
+  function importDestination() { return { parent: uploadParent(), name: destinationName(), epoch: authEpoch }; }
+  function validateImportPath(path, directory = false) {
+    const parts = String(path).split('/');
+    if (!parts.length || parts.length > (directory ? 64 : 65) || parts.some(part => !part || part === '.' || part === '..' || part.length > 255 || /[\\\u0000-\u001f\u007f]/.test(part) || part.trim() !== part)) throw new Error('A folder upload contains an invalid or overly deep path: ' + path);
+    return parts;
+  }
+  function queueImport(entries, target) {
+    if (!state.user || target.epoch !== authEpoch || !entries.length) return;
+    const folders = new Map();
+    const files = new Map();
+    for (const entry of entries) {
+      const parts = validateImportPath(entry.path, entry.directory);
+      for (let i = 1; i < parts.length; i++) folders.set(parts.slice(0, i).join('/'), true);
+      if (entry.directory) folders.set(entry.path, true);
+      else { if (files.has(entry.path)) throw new Error('The upload contains two files at “' + entry.path + '”. Upload them separately.'); files.set(entry.path, entry.file); }
     }
+    if (folders.size + files.size > 10000) throw new Error('Choose a smaller folder: each upload can contain up to 10,000 files and folders.');
+    for (const path of files.keys()) if (folders.has(path)) throw new Error('A file and folder share the path “' + path + '”.');
+    const context = { parents: new Map([['', target.parent]]), epoch: target.epoch };
+    uploadPage = Math.floor(state.uploads.length / 50);
+    const add = (path, file, directory) => {
+      const parentPath = path.slice(0, Math.max(0, path.lastIndexOf('/')));
+      const tooLarge = !directory && file.size > state.limits.maxUploadBytes;
+      state.uploads.push({ id: ++uploadSequence, file, path, parentPath, context, directory, parent: target.parent, destination: target.name + (parentPath ? ' / ' + parentPath : ''), progress: 0, status: tooLarge ? 'failed' : 'queued', error: tooLarge ? 'This file exceeds the ' + bytes(state.limits.maxUploadBytes) + ' upload limit.' : '', xhr: null });
+    };
+    for (const path of [...folders.keys()].sort((a, b) => a.split('/').length - b.split('/').length)) add(path, { name: path.split('/').at(-1), kind: 'folder', size: 0 }, true);
+    for (const [path, file] of files) add(path, file, false);
     $('upload-list').hidden = false;
     $('toggle-uploads').setAttribute('aria-expanded', 'true');
     renderUploads();
     pumpUploads();
+  }
+  function addFiles(files, target = importDestination(), preservePaths = false) {
+    if (!state.user || isTrash() || !files.length) return;
+    if (preservePaths && files.some(file => !file.webkitRelativePath || !file.webkitRelativePath.includes('/'))) { toast('This file picker does not support folder uploads. Use a desktop browser to upload a folder, or choose Upload files.', true); return; }
+    try { queueImport(files.map(file => ({ path: preservePaths ? file.webkitRelativePath : file.name, file })), target); }
+    catch (error) { toast(error.message, true); }
+  }
+  function chooseFolderUpload() {
+    if (navigator.userAgent.includes('HarborAndroid/')) {
+      toast('Use a desktop browser for folder uploads.', true);
+      return;
+    }
+    $('folder-input').click();
+  }
+  async function readDroppedEntries(entries, stillCurrent = () => true) {
+    const result = [];
+    let count = 0;
+    const visit = async (entry, prefix = '') => {
+      if (!stillCurrent()) throw new Error('Folder import canceled.');
+      if (++count > 10000) throw new Error('Choose a smaller folder: each upload can contain up to 10,000 files and folders.');
+      const path = prefix + entry.name;
+      validateImportPath(path, entry.isDirectory);
+      if (entry.isDirectory) {
+        result.push({ path, directory: true });
+        const reader = entry.createReader();
+        while (true) {
+          const children = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+          if (!children.length) break;
+          for (const child of children) await visit(child, path + '/');
+        }
+      } else if (entry.isFile) {
+        const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+        result.push({ path, file });
+      }
+    };
+    for (const entry of entries) await visit(entry);
+    return result;
+  }
+  async function importDrop(dataTransfer) {
+    const target = importDestination();
+    // Capture entries during the drop event; browsers revoke the drag data afterward.
+    const items = Array.from(dataTransfer.items || []).filter(item => item.kind === 'file');
+    const entries = items.map(item => item.webkitGetAsEntry?.()).filter(Boolean);
+    const files = Array.from(dataTransfer.files || []);
+    collectingFiles = true;
+    $('upload-folder').disabled = true;
+    try {
+      if (entries.length === items.length && entries.length) queueImport(await readDroppedEntries(entries, () => target.epoch === authEpoch), target);
+      else addFiles(files, target);
+    } catch (error) { if (target.epoch === authEpoch) toast('Couldn’t read this folder. ' + error.message, true); }
+    finally { collectingFiles = false; $('upload-folder').disabled = false; }
   }
 
   function renderUploads() {
@@ -929,18 +1216,26 @@
     const running = state.uploads.filter(upload => upload.status === 'queued' || upload.status === 'uploading').length;
     const completed = state.uploads.filter(upload => upload.status === 'complete').length;
     const failed = state.uploads.filter(upload => upload.status === 'failed').length;
+    const pages = Math.max(1, Math.ceil(state.uploads.length / 50));
+    uploadPage = Math.min(uploadPage, pages - 1);
+    $('upload-pages').hidden = pages === 1;
+    $('upload-previous').disabled = uploadPage === 0;
+    $('upload-next').disabled = uploadPage >= pages - 1;
+    $('upload-page-label').textContent = (uploadPage + 1) + ' of ' + pages;
+    $('retry-failed-uploads').hidden = !failed;
+    $('retry-failed-uploads').disabled = !!running;
     $('uploads-summary').textContent = running ? 'Uploading · ' + completed + ' of ' + state.uploads.length + ' complete' : failed ? 'Uploads · ' + failed + ' need attention' : completed ? completed + (completed === 1 ? ' upload complete' : ' uploads complete') : 'Uploads canceled';
     const holder = $('upload-list');
     holder.replaceChildren();
-    for (const upload of state.uploads) {
+    for (const upload of state.uploads.slice(uploadPage * 50, (uploadPage + 1) * 50)) {
       const kind = classify(upload.file);
       const row = element('div', 'upload-row kind-' + kind);
       const top = element('div', 'upload-row-top');
       top.append(fileIcon(kind));
-      const name = element('span', 'upload-row-name', upload.file.name);
-      name.title = fileKindLabels[kind] + ' · ' + upload.file.name;
+      const name = element('span', 'upload-row-name', upload.path || upload.file.name);
+      name.title = fileKindLabels[kind] + ' · ' + (upload.path || upload.file.name);
       top.append(name);
-      if (upload.status === 'queued' || upload.status === 'uploading') {
+      if (upload.status === 'queued' || (upload.status === 'uploading' && !upload.directory)) {
         const cancel = menuAction('', 'close', () => {
           upload.status = 'canceled';
           upload.xhr?.abort();
@@ -956,6 +1251,7 @@
         const retry = menuAction('', 'refresh', () => {
           if (!state.user) return toast('Sign in before retrying an upload.', true);
           if (upload.file.size > state.limits.maxUploadBytes) return toast('This file exceeds the current upload limit.', true);
+          if (upload.context && !upload.context.parents.has(upload.parentPath)) return toast('Retry the parent folder first. Its files can be retried after that folder is created.', true);
           upload.status = 'queued'; upload.progress = 0; upload.error = '';
           renderUploads(); pumpUploads();
         }, 'icon-button');
@@ -964,20 +1260,20 @@
         retry.dataset.uploadId = upload.id;
         retry.dataset.uploadAction = 'retry';
         top.append(retry);
-      } else {
+      } else if (upload.status === 'complete') {
         const check = icon('check');
         check.classList.add('upload-complete');
         top.append(check);
       }
       row.append(top);
-      if (upload.status === 'uploading') {
+      if (upload.status === 'uploading' && !upload.directory) {
         const progress = element('progress');
         progress.max = 100;
         progress.value = upload.progress;
         progress.setAttribute('aria-label', 'Upload progress for ' + upload.file.name);
         row.append(progress);
       }
-      const status = upload.status === 'failed' ? upload.error : upload.status === 'canceled' ? 'Canceled · choose retry to try again' : upload.status === 'complete' ? bytes(upload.file.size) + ' · Saved to ' + upload.destination : upload.status === 'queued' ? 'Waiting · ' + bytes(upload.file.size) + ' · ' + upload.destination : upload.progress >= 100 ? 'Finishing upload…' : Math.round(upload.progress) + '% · ' + bytes(upload.file.size) + ' · ' + upload.destination;
+      const status = upload.status === 'failed' ? upload.error : upload.status === 'canceled' ? 'Canceled · choose retry to try again' : upload.status === 'complete' ? (upload.directory ? 'Folder created' : bytes(upload.file.size)) + ' · Saved to ' + upload.destination : upload.status === 'queued' ? 'Waiting · ' + (upload.directory ? 'Folder' : bytes(upload.file.size)) + ' · ' + upload.destination : upload.directory ? 'Creating folder…' : upload.progress >= 100 ? 'Finishing upload…' : Math.round(upload.progress) + '% · ' + bytes(upload.file.size) + ' · ' + upload.destination;
       row.append(element('div', 'upload-row-status' + (upload.status === 'failed' ? ' upload-failed' : ''), status));
       holder.append(row);
     }
@@ -992,10 +1288,18 @@
     const upload = state.uploads.find(entry => entry.status === 'queued');
     if (!upload) return;
     state.uploading = true;
+    const epoch = authEpoch;
     upload.status = 'uploading';
     renderUploads();
     try {
-      await sendUpload(upload);
+      if (upload.context) {
+        if (!upload.context.parents.has(upload.parentPath)) throw new Error('The parent folder wasn’t created. Retry its folder first, then retry this item.');
+        upload.parent = upload.context.parents.get(upload.parentPath);
+      }
+      if (upload.directory) {
+        const folder = await api('/api/folders', { method: 'POST', body: { parent: upload.parent, name: upload.file.name } });
+        if (epoch === authEpoch && upload.status === 'uploading') upload.context.parents.set(upload.path, folder.id);
+      } else await sendUpload(upload);
       if (upload.status === 'uploading') upload.status = 'complete';
     } catch (error) {
       if (upload.status === 'uploading') {
@@ -1005,11 +1309,22 @@
     } finally {
       upload.xhr = null;
       state.uploading = false;
+      if (epoch !== authEpoch) { pumpUploads(); return; }
       renderUploads();
       window.clearTimeout(refreshTimer);
       refreshTimer = window.setTimeout(() => { if (state.user) loadFiles(); }, 250);
       pumpUploads();
     }
+  }
+
+  function retryFailedUploads() {
+    if (!state.user || state.uploading) return;
+    // Folder jobs were queued before their children; retrying in place preserves that dependency.
+    for (const upload of state.uploads) {
+      if (upload.status !== 'failed' || upload.file.size > state.limits.maxUploadBytes) continue;
+      upload.status = 'queued'; upload.progress = 0; upload.error = '';
+    }
+    renderUploads(); pumpUploads();
   }
 
   function sendUpload(upload, canRecoverCsrf = true) {
@@ -1103,9 +1418,25 @@
   });
   $('change-password').addEventListener('click', changePassword);
   $('new-folder').addEventListener('click', newFolder);
+  $('select-all').addEventListener('click', () => { selected.clear(); sortedItems().slice(0, 100).forEach(item => selected.add(item.id)); renderFiles(); });
+  $('clear-selection').addEventListener('click', () => { selected.clear(); renderFiles(); $('select-all').focus(); });
+  $('bulk-move').addEventListener('click', () => openDestination('move', selectedItems()));
+  $('bulk-download').addEventListener('click', event => prepareArchive(event, $('bulk-download'), [...selected]));
+  $('bulk-copy').addEventListener('click', () => openDestination('copy', selectedItems()));
+  $('bulk-trash').addEventListener('click', () => trashItems(selectedItems()));
+  $('bulk-restore').addEventListener('click', () => restoreItems(selectedItems()));
+  $('bulk-purge').addEventListener('click', () => purgeItems(selectedItems()));
+  $('empty-trash').addEventListener('click', () => purgeItems([], true));
+  for (const id of ['destination-close', 'destination-cancel']) $(id).addEventListener('click', () => { if (!destination?.busy) closeDestination(); });
+  $('destination-dialog').addEventListener('cancel', event => { if (destination?.busy) event.preventDefault(); });
+  $('destination-dialog').addEventListener('close', () => { if (destination) closeDestination(); });
+  $('destination-submit').addEventListener('click', submitDestination);
+  $('destination-retry').addEventListener('click', () => loadDestination(destination?.parent || 'root'));
   for (const id of ['upload-button', 'browse-files']) $(id).addEventListener('click', () => $('file-input').click());
   $('file-input').addEventListener('change', event => { addFiles(Array.from(event.target.files || [])); event.target.value = ''; });
-  $('empty-action').addEventListener('click', () => state.route.q ? navigate() : $('file-input').click());
+  $('upload-folder').addEventListener('click', chooseFolderUpload);
+  $('folder-input').addEventListener('change', event => { addFiles(Array.from(event.target.files || []), importDestination(), true); event.target.value = ''; });
+  $('empty-action').addEventListener('click', () => state.route.q || isTrash() ? navigate() : $('file-input').click());
   $('retry-load').addEventListener('click', loadFiles);
   $('search').addEventListener('input', () => {
     window.clearTimeout(searchTimer);
@@ -1132,7 +1463,7 @@
     document.querySelectorAll('.file-menu[open], .account-menu[open]').forEach(menu => { if (!menu.contains(event.target)) menu.open = false; });
   });
   document.addEventListener('keydown', event => {
-    if (event.key === 'Tab' && $('sidebar').classList.contains('is-open') && !$('form-dialog').open && !$('admin-dialog').open) {
+    if (event.key === 'Tab' && $('sidebar').classList.contains('is-open') && !$('form-dialog').open && !$('admin-dialog').open && !$('destination-dialog').open) {
       const focusable = Array.from($('sidebar').querySelectorAll('a,button,summary')).filter(node => !node.disabled && node.getClientRects().length);
       const first = focusable[0];
       const last = focusable.at(-1);
@@ -1152,17 +1483,21 @@
     if (state.dialogBusy || !dialogSubmit || (dialogIsPassword && authCooldownUntil > Date.now())) return;
     const values = Object.fromEntries(new FormData($('dialog-form')));
     const originalLabel = $('dialog-submit').textContent;
+    const epoch = authEpoch;
     setDialogBusy(true);
     $('dialog-submit').textContent = 'Working…';
     $('dialog-error').hidden = true;
     try {
       await dialogSubmit(values);
+      if (epoch !== authEpoch) return;
       $('form-dialog').close();
     } catch (error) {
+      if (epoch !== authEpoch) return;
       if (dialogIsPassword) honorAuthCooldown(error);
       $('dialog-error').textContent = dialogIsPassword ? authErrorMessage(error) : error.message;
       $('dialog-error').hidden = false;
     } finally {
+      if (epoch !== authEpoch) return;
       setDialogBusy(false);
       $('dialog-submit').textContent = originalLabel;
       updateAuthControls();
@@ -1172,6 +1507,9 @@
   $('preview-dialog').addEventListener('close', cleanPreview);
   $('preview-dialog').addEventListener('click', event => { if (event.target === $('preview-dialog')) { const bounds = $('preview-dialog').getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) $('preview-dialog').close(); } });
   $('toggle-uploads').addEventListener('click', () => { const expanded = $('toggle-uploads').getAttribute('aria-expanded') === 'true'; $('toggle-uploads').setAttribute('aria-expanded', String(!expanded)); $('upload-list').hidden = expanded; });
+  $('retry-failed-uploads').addEventListener('click', retryFailedUploads);
+  $('upload-previous').addEventListener('click', () => { uploadPage = Math.max(0, uploadPage - 1); renderUploads(); $('upload-list').scrollTop = 0; });
+  $('upload-next').addEventListener('click', () => { uploadPage++; renderUploads(); $('upload-list').scrollTop = 0; });
   $('clear-uploads').addEventListener('click', () => {
     const active = state.uploads.filter(upload => upload.status === 'queued' || upload.status === 'uploading');
     if (active.length === state.uploads.length) { $('upload-list').hidden = true; $('toggle-uploads').setAttribute('aria-expanded', 'false'); }
@@ -1179,27 +1517,19 @@
     renderUploads();
   });
   const fileDrag = event => Array.from(event.dataTransfer?.types || []).includes('Files');
-  document.addEventListener('dragenter', event => { if (fileDrag(event)) { event.preventDefault(); if (state.user && !$('form-dialog').open && !$('preview-dialog').open && !$('admin-dialog').open) { dragDepth++; $('drag-overlay').hidden = false; } } });
-  document.addEventListener('dragover', event => { if (fileDrag(event)) { event.preventDefault(); event.dataTransfer.dropEffect = state.user ? 'copy' : 'none'; } });
+  const canDrop = () => state.user && !isTrash() && !collectingFiles && !$('form-dialog').open && !$('preview-dialog').open && !$('admin-dialog').open && !$('destination-dialog').open;
+  document.addEventListener('dragenter', event => { if (fileDrag(event)) { event.preventDefault(); if (canDrop()) { dragDepth++; $('drag-overlay').hidden = false; } } });
+  document.addEventListener('dragover', event => { if (fileDrag(event)) { event.preventDefault(); event.dataTransfer.dropEffect = canDrop() ? 'copy' : 'none'; } });
   document.addEventListener('dragleave', event => { if (fileDrag(event)) { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $('drag-overlay').hidden = true; } });
   document.addEventListener('drop', event => {
     if (!fileDrag(event)) return;
     event.preventDefault();
     dragDepth = 0;
     $('drag-overlay').hidden = true;
-    if (!state.user || $('form-dialog').open || $('preview-dialog').open || $('admin-dialog').open) return;
-    let files = Array.from(event.dataTransfer.files || []);
-    if (event.dataTransfer.items?.length) {
-      const items = Array.from(event.dataTransfer.items).filter(item => item.kind === 'file');
-      if (items.some(item => item.webkitGetAsEntry?.()?.isDirectory)) {
-        toast('Folder uploads aren’t supported yet. Create a folder here, then drop its files inside.', true);
-        files = items.filter(item => !item.webkitGetAsEntry?.()?.isDirectory).map(item => item.getAsFile()).filter(Boolean);
-      }
-    }
-    addFiles(files);
+    if (canDrop()) importDrop(event.dataTransfer);
   });
   window.addEventListener('blur', () => { dragDepth = 0; $('drag-overlay').hidden = true; });
-  window.addEventListener('beforeunload', event => { if (state.uploads.some(upload => upload.status === 'queued' || upload.status === 'uploading')) { event.preventDefault(); event.returnValue = ''; } });
+  window.addEventListener('beforeunload', event => { if (collectingFiles || destination?.busy || state.dialogBusy || state.uploads.some(upload => upload.status === 'queued' || upload.status === 'uploading')) { event.preventDefault(); event.returnValue = ''; } });
 
   try { if (localStorage.getItem('harbor-view') === 'list') setView('list'); } catch { /* View preference is optional. */ }
   closeSidebar();

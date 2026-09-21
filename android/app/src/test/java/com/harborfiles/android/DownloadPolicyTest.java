@@ -27,6 +27,37 @@ public class DownloadPolicyTest {
         }
     }
 
+    @Test public void acceptsOnlyBoundedCanonicalArchiveSelections() {
+        String first = "12345678-1234-4abc-8abc-1234567890ab";
+        String second = "22345678-1234-4ABC-8ABC-1234567890AB";
+        String address = ORIGIN + "/api/archive?ids=" + first + "," + second + "&download=1";
+        assertEquals(address, DownloadPolicy.validate(ORIGIN, address).toString());
+        StringBuilder hundred = new StringBuilder();
+        for (int i = 0; i < 100; i++) {
+            if (i > 0) hundred.append(',');
+            hundred.append(String.format(java.util.Locale.ROOT, "%08x-1234-4abc-8abc-1234567890ab", i));
+        }
+        String limit = ORIGIN + "/api/archive?ids=" + hundred + "&download=1";
+        assertEquals(limit, DownloadPolicy.validate(ORIGIN, limit).toString());
+        assertThrows(IllegalArgumentException.class, () -> DownloadPolicy.validate(ORIGIN,
+                ORIGIN + "/api/archive?ids=" + hundred + "," + first + "&download=1"));
+        for (String query : new String[]{"", "ids=", "ids=" + first, "download=1&ids=" + first,
+                "ids=" + first + "&download=0", "ids=" + first + "&download=%31",
+                "ids=" + first + ",&download=1", "ids=" + first + "%2C" + second + "&download=1",
+                "ids=" + first + "," + first.toUpperCase(java.util.Locale.ROOT) + "&download=1",
+                "ids=../escape&download=1", "ids=" + first + "&download=1&next=https://evil.example",
+                "ids=" + first + "&download=1&ids=" + second, "ids=" + first + "&download=1#fragment"}) {
+            assertThrows(query, IllegalArgumentException.class,
+                    () -> DownloadPolicy.validate(ORIGIN, ORIGIN + "/api/archive?" + query));
+        }
+        for (String path : new String[]{"/api/archive/", "/api/%61rchive", "/x/../api/archive"}) {
+            assertThrows(path, IllegalArgumentException.class,
+                    () -> DownloadPolicy.validate(ORIGIN, ORIGIN + path + "?ids=" + first + "&download=1"));
+        }
+        assertThrows(IllegalArgumentException.class, () -> DownloadPolicy.validate(ORIGIN,
+                "https://evil.example/api/archive?ids=" + first + "&download=1"));
+    }
+
     @Test public void unicodeExtendedFilenameTakesPrecedenceWithoutFormDecoding() {
         assertEquals("京都 + 100%.txt", DownloadPolicy.safeFilename(
                 "attachment; filename=ascii.txt; filename*=UTF-8''%E4%BA%AC%E9%83%BD%20+%20100%25.txt", "fallback"));

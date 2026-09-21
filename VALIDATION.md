@@ -1,5 +1,21 @@
 # Verification record
 
+## 0.1.5-alpha — recycle bin and file management
+
+Verified September 21, 2026 with disposable files and accounts. The release adds recycle-bin retention/recovery, bounded bulk moves/copies, folder imports, ZIP64 downloads, and Android ZIP support.
+
+The final Linux Docker image passed **125/125 checks** with no skips in 17.67 seconds using Node.js 24.21.0 and UID/GID 1000. The container had no network or published ports, a read-only root and test mount, dropped capabilities, a 1 GiB memory limit, a 100-process limit, and a 512 MiB temporary filesystem. Test-file concurrency was limited to two: the earlier unrestricted test runner aborted a worker under the bounded container resources. This is a test-runner setting, not a change to the app's runtime limits. The Windows run passed **118 checks with five Linux-only skips**; after the final Android folder-picker guard and retention help text, all **41 frontend checks** passed again. The final 14 operation checks also passed on Windows, including a bin with 10,002 entries across two valid roots, the exact 10,000-entry operation boundary, and rejection of a larger individual tree without changes.
+
+An independent migration/recovery check constructs the original database schema and old saved settings, preserves an existing administrator and file bytes, recycles a folder, stops Harbor, copies the complete backup to a new path, and restores that folder from the recovered bin despite a name conflict. Operation tests cover quota including retained trash and copy reservations, independently trashed descendants, cycle/depth/conflict rejection, partial purge retry after restart, missing mount safety, expired retention, session revocation, pending request bodies, source/destination locks, client cancellation, interrupted copy cleanup, and shutdown during archives. Text/slide/content paths reject items recycled while asynchronous work is pending.
+
+ZIP tests use an independent reader and CRC implementation to verify byte equality, Unicode, empty files/directories, exact lengths, corrupted/truncated archives, cancellation/backpressure, unsafe names, and ZIP64 size/offset boundaries. A separate Python standard-library reader also opened a real streamed ZIP64 archive and verified its payloads. Boundary tests inspect plans/headers above 4 GiB; they do not claim a multi-gigabyte phone transfer was performed.
+
+Browser checks exercised real bulk copies and moves, rejection of occupied names, recycling/restoring a populated folder, a real nested directory picker upload, a ZIP download that leaves the library open, and saving retention settings. Desktop slate-dark and 390-by-844 light/dark layouts were inspected, including selection controls, list/grid views, the destination picker, and Administration. The phone-size page and dialog had no horizontal overflow; the final browser session logged no console warnings or errors. Browser checks caught and resolved a FileHandle stream completion hang in copies; copying now uses a bounded explicit read/write loop with cancellation and cleanup.
+
+Android **0.1.5-alpha** passed **15 JVM tests and 13 emulator tests**, including native authenticated ZIP saving and rejection of unsupported directory selection. The exact signed APK updates the previous test app and retains its development certificate. See [android/VALIDATION.md](android/VALIDATION.md). No physical phone or live Proxmox deployment was modified or tested in this release. Folder-tree uploads require a desktop browser; Android supports individual/multiple files. The earlier Office-renderer trials below remain historical; real LibreOffice conversion was not repeated for these file-management changes.
+
+### Earlier verification
+
 Verified on September 20, 2026 using Node.js 24.19.0 on Windows and Node.js 24.21.0 inside Docker on Ubuntu-26.04 / WSL 2.
 
 ## Office previews and file colors

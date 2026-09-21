@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.1.5-alpha — 2026-09-21
+
+- Move deleted files and folders to a recycle bin, with restoration, permanent removal, and configurable retention (30 days by default). Retained files continue to count toward storage usage.
+- Select multiple items to move, copy, recycle, restore, permanently remove, or download together. Moves and copies preserve folder trees and never overwrite existing names.
+- Upload folder trees and download folders or selections as streamed ZIP archives.
+- Support archive downloads in the Android companion app and advance its version to 0.1.5-alpha.
 
 - Add an Android 10+ companion app with a secure server connection screen, existing Harbor sign-in and previews, native multi-file upload/save pickers, download progress/cancellation, fullscreen media, and Android Back handling.
 - Isolate Android server sessions, restrict native downloads to the connected server without redirects, and add Android unit/device tests.

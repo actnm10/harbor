@@ -33,7 +33,9 @@ final class LoopbackHttpsFixture implements AutoCloseable {
     static final String COOKIE = "harbor_fixture=instrumentation-session";
     static final String CSRF = "instrumentation-csrf-token";
     static final String DOWNLOAD_PATH = "/api/files/00000000-0000-4000-8000-000000000001/content?download=1";
+    static final String ARCHIVE_PATH = "/api/archive?ids=00000000-0000-4000-8000-000000000001,00000000-0000-4000-8000-000000000002&download=1";
     static final byte[] FILE_BYTES = new byte[] {0, 1, 2, 10, 13, 42, 100, (byte) 200, (byte) 255};
+    static final byte[] ARCHIVE_BYTES = archiveBytes();
     final List<Request> requests = new CopyOnWriteArrayList<>();
     final AtomicInteger acceptedWrites = new AtomicInteger();
     final AtomicInteger rejectedWrites = new AtomicInteger();
@@ -121,6 +123,9 @@ final class LoopbackHttpsFixture implements AutoCloseable {
         if (request.path.equals(DOWNLOAD_PATH)) {
             send(output, signedIn ? 200 : 401, "application/octet-stream", Collections.singletonMap("Content-Disposition", "attachment; filename=\"fixture.bin\""), signedIn ? FILE_BYTES : new byte[0]); return;
         }
+        if (request.path.equals(ARCHIVE_PATH)) {
+            send(output, signedIn ? 200 : 401, "application/zip", Collections.singletonMap("Content-Disposition", "attachment; filename=\"Harbor files.zip\""), signedIn ? ARCHIVE_BYTES : new byte[0]); return;
+        }
         send(output, 404, "text/plain", Collections.emptyMap(), utf8("Fixture route not found"));
     }
 
@@ -133,6 +138,17 @@ final class LoopbackHttpsFixture implements AutoCloseable {
     }
 
     private static byte[] utf8(String value) { return value.getBytes(StandardCharsets.UTF_8); }
+    private static byte[] archiveBytes() {
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(bytes, StandardCharsets.UTF_8)) {
+                zip.putNextEntry(new java.util.zip.ZipEntry("京都/")); zip.closeEntry();
+                zip.putNextEntry(new java.util.zip.ZipEntry("京都/fixture.bin")); zip.write(FILE_BYTES); zip.closeEntry();
+                zip.putNextEntry(new java.util.zip.ZipEntry("empty/")); zip.closeEntry();
+            }
+            return bytes.toByteArray();
+        } catch (IOException failure) { throw new ExceptionInInitializerError(failure); }
+    }
     private static String line(InputStream input) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         for (int value; (value = input.read()) != -1;) {
@@ -161,6 +177,7 @@ final class LoopbackHttpsFixture implements AutoCloseable {
         <dialog id="fixture-dialog"><p>File details</p><button id="fixture-close-dialog">Close</button></dialog>
         <label>Choose fixture<input type="file" id="fixture-file"></label>
         <a id="fixture-download" href="/api/files/00000000-0000-4000-8000-000000000001/content?download=1" download="fixture.bin">Download</a>
+        <a id="fixture-archive" href="/api/archive?ids=00000000-0000-4000-8000-000000000001,00000000-0000-4000-8000-000000000002&amp;download=1" download="Harbor files.zip">Download archive</a>
         <script>
         window.fixtureReady=false;window.fixtureCsrf='';
         async function session(){const r=await fetch('/api/session');const data=await r.json();window.fixtureCsrf=data.csrfToken||'';document.getElementById('fixture-status').textContent=r.ok?'Signed in':'Signed out';window.fixtureReady=true;}

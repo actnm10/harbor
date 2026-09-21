@@ -1,6 +1,6 @@
 import { HttpError } from './lib.js';
 
-const maxima = { maxUploadBytes: 1024 ** 4, maxStorageBytes: 1024 ** 5, maxConcurrentUploads: 64, sessionHours: 720 };
+const maxima = { maxUploadBytes: 1024 ** 4, maxStorageBytes: 1024 ** 5, maxConcurrentUploads: 64, sessionHours: 720, trashRetentionDays: 365 };
 const keys = [...Object.keys(maxima), 'activeStorageId'];
 
 export function createSettingsManager(db, config, storage, getUsage) {
@@ -15,14 +15,14 @@ export function createSettingsManager(db, config, storage, getUsage) {
     return value;
   }
   const saved = db.prepare("SELECT value FROM app_meta WHERE key='settings'").get();
-  let current = validate(saved ? JSON.parse(saved.value) : {
+  let current = validate(saved ? { trashRetentionDays: config.trashRetentionDays, ...JSON.parse(saved.value) } : {
     maxUploadBytes: config.maxUploadBytes, maxStorageBytes: config.maxStorageBytes,
     maxConcurrentUploads: config.maxConcurrentUploads, sessionHours: config.sessionHours,
-    activeStorageId: 'original',
+    activeStorageId: 'original', trashRetentionDays: config.trashRetentionDays,
   });
   function write(value) { db.prepare("INSERT OR REPLACE INTO app_meta(key,value) VALUES('settings',?)").run(JSON.stringify(value)); }
   function apply(value) { current = value; for (const key of keys) config[key] = value[key]; }
-  if (!saved) write(current);
+  if (!saved || !Object.hasOwn(JSON.parse(saved.value), 'trashRetentionDays')) write(current);
   apply(current);
 
   function snapshot() {

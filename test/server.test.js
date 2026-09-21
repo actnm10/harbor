@@ -301,7 +301,8 @@ test('folders, breadcrumbs, global search and media filters reflect real stored 
   const remaining = (await f.list()).stats;
   assert.equal(remaining.folderCount, 0);
   assert.equal(remaining.fileCount, 2);
-  assert.equal(remaining.usedBytes, audio.size + textFile.size);
+  assert.equal(remaining.usedBytes, image.size + video.size + audio.size + textFile.size);
+  assert.equal(remaining.trashBytes, image.size + video.size);
 });
 
 test('duplicate names, invalid parents and filesystem traversal names are rejected without overwrites', async t => {
@@ -420,7 +421,7 @@ test('Unicode and quoted filenames download without corrupting response headers'
   assert.equal(await response.text(), 'Unicode file content');
 });
 
-test('upload limits and concurrent quota checks prevent overshoot; deleting frees capacity', async t => {
+test('upload limits and concurrent quota checks prevent overshoot; purging frees capacity', async t => {
   const f = await fixture(t, { maxUploadBytes: 64, maxStorageBytes: 100 });
   await f.login();
   await expectError(await f.upload('too-big.bin', Buffer.alloc(65)), 413);
@@ -437,6 +438,8 @@ test('upload limits and concurrent quota checks prevent overshoot; deleting free
   assert.equal(state.stats.fileCount, 1);
   assert.equal(state.stats.usedBytes, 60);
   assert.equal((await f.request(`/api/files/${state.items[0].id}`, { method: 'DELETE' })).status, 204);
+  await expectError(await f.upload('trash-still-uses-space.bin', Buffer.alloc(64)), 507);
+  assert.equal((await f.request('/api/trash/purge', { method: 'POST', json: { ids: [state.items[0].id] } })).status, 200);
   assert.equal((await f.upload('space-reused.bin', Buffer.alloc(64))).status, 201);
   assert.equal((await f.list()).stats.usedBytes, 64);
 });
@@ -758,6 +761,8 @@ test('storage switching retains every library across restart and deletes from th
     assert.equal(await (await f.request(`/api/files/${item.id}/content`)).text(), content);
   }
   assert.equal((await f.request(`/api/files/${newFile.id}`, { method: 'DELETE' })).status, 204);
+  assert.equal((await stat(path.join(location.path, newFile.id))).size, newFile.size);
+  assert.equal((await f.request('/api/trash/purge', { method: 'POST', json: { ids: [newFile.id] } })).status, 200);
   await assert.rejects(stat(path.join(location.path, newFile.id)), { code: 'ENOENT' });
   assert.equal((await adminSettings(f)).storage.locations.find(item => item.id === newId).fileCount, 0);
   assert.equal(await readFile(path.join(f.dataDir, 'blobs', oldFile.id), 'utf8'), 'old bytes');

@@ -12,6 +12,8 @@ import { HttpError, loadConfig, openDatabase, hashPassword, verifyPassword, vali
 import { createStorageManager } from './storage.js';
 import { createSettingsManager } from './settings.js';
 import { createPresentationPreview } from './presentation-preview.js';
+import { createFileOperations } from './file-operations.js';
+import { prepareArchive, streamArchive } from './archive.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -64,6 +66,7 @@ export async function createApplication(overrides = {}) {
   const activeUploads = new Map();
   const loginBuckets = new Map();
   const loginBurstBuckets = new Map();
+  const activeRequests = new Set(), archiveControllers = new Set();
   let credentialHash = db.prepare('SELECT password_hash FROM owner WHERE id = 1').get()?.password_hash;
   let credentialGeneration = 0;
   let authInFlight = 0, previewsInFlight = 0, presentationsInFlight = 0, reservedBytes = 0, closing = false;
@@ -74,33 +77,40 @@ export async function createApplication(overrides = {}) {
     storage.cleanIncomplete();
     db.exec("DELETE FROM nodes WHERE status = 'pending'");
   } catch (error) { db.close(); throw error; }
+  const operations = createFileOperations({ db, config, storage, activeUploads, stats,
+    availableBytes: () => config.maxStorageBytes - stats().usedBytes - reservedBytes,
+    reserveBytes: bytes => { reservedBytes += bytes; }, releaseBytes: bytes => { reservedBytes -= bytes; } });
+  await operations.cleanup();
   const dummyHash = await hashPassword(randomBytes(32).toString('hex'));
   db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(Date.now());
 
   function stats() {
     const row = db.prepare(`SELECT COALESCE(SUM(CASE WHEN kind = 'file' THEN size ELSE 0 END), 0) AS usedBytes,
-      SUM(CASE WHEN kind = 'file' THEN 1 ELSE 0 END) AS fileCount,
-      SUM(CASE WHEN kind = 'folder' THEN 1 ELSE 0 END) AS folderCount,
-      SUM(CASE WHEN kind = 'file' AND mime LIKE 'image/%' THEN 1 ELSE 0 END) AS imageCount,
-      SUM(CASE WHEN kind = 'file' AND mime LIKE 'video/%' THEN 1 ELSE 0 END) AS videoCount,
-      SUM(CASE WHEN kind = 'file' AND mime LIKE 'audio/%' THEN 1 ELSE 0 END) AS audioCount
+      SUM(CASE WHEN kind = 'file' AND deleted_at IS NULL THEN 1 ELSE 0 END) AS fileCount,
+      SUM(CASE WHEN kind = 'folder' AND deleted_at IS NULL THEN 1 ELSE 0 END) AS folderCount,
+      SUM(CASE WHEN kind = 'file' AND deleted_at IS NULL AND mime LIKE 'image/%' THEN 1 ELSE 0 END) AS imageCount,
+      SUM(CASE WHEN kind = 'file' AND deleted_at IS NULL AND mime LIKE 'video/%' THEN 1 ELSE 0 END) AS videoCount,
+      SUM(CASE WHEN kind = 'file' AND deleted_at IS NULL AND mime LIKE 'audio/%' THEN 1 ELSE 0 END) AS audioCount,
+      SUM(CASE WHEN kind = 'file' AND deleted_at IS NOT NULL THEN size ELSE 0 END) AS trashBytes,
+      SUM(CASE WHEN trash_root=1 THEN 1 ELSE 0 END) AS trashCount
       FROM nodes WHERE status = 'ready'`).get();
     return { usedBytes: row.usedBytes, maxStorageBytes: config.maxStorageBytes,
       fileCount: row.fileCount ?? 0, folderCount: row.folderCount ?? 0,
-      imageCount: row.imageCount ?? 0, videoCount: row.videoCount ?? 0, audioCount: row.audioCount ?? 0 };
+      imageCount: row.imageCount ?? 0, videoCount: row.videoCount ?? 0, audioCount: row.audioCount ?? 0,
+      trashBytes: row.trashBytes ?? 0, trashCount: row.trashCount ?? 0 };
   }
 
   function parentId(value = 'root') {
     if (value === 'root' || value === null) return null;
     if (typeof value !== 'string' || !uuidPattern.test(value)) throw new HttpError(400, 'Invalid folder.');
-    const row = db.prepare("SELECT id FROM nodes WHERE id = ? AND kind = 'folder' AND status = 'ready'").get(value);
+    const row = db.prepare("SELECT id FROM nodes WHERE id = ? AND kind = 'folder' AND status = 'ready' AND deleted_at IS NULL").get(value);
     if (!row) throw new HttpError(404, 'Folder not found.');
     return value;
   }
 
   function getNode(id) {
     if (!uuidPattern.test(id)) throw new HttpError(404, 'File not found.');
-    const row = db.prepare("SELECT * FROM nodes WHERE id = ? AND status = 'ready'").get(id);
+    const row = db.prepare("SELECT * FROM nodes WHERE id = ? AND status = 'ready' AND deleted_at IS NULL").get(id);
     if (!row) throw new HttpError(404, 'File not found.');
     return row;
   }
@@ -255,6 +265,7 @@ export async function createApplication(overrides = {}) {
     if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') throw new HttpError(415, 'Encoded uploads are not supported.');
     const name = validateName(url.searchParams.get('name'));
     const parent = parentId(url.searchParams.get('parent') ?? 'root');
+    operations.assertWritable(parent);
     // An administrative change applies only to uploads started afterwards.
     const storageId = config.activeStorageId;
     const blobDir = storage.locationPath(storageId);
@@ -359,8 +370,10 @@ export async function createApplication(overrides = {}) {
     let handle;
     try { handle = await open(storage.blobPath(row), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)); }
     catch (error) { if (error.code === 'ENOENT') throw new HttpError(404, 'File content is unavailable.'); throw error; }
-    const fileInfo = await handle.stat();
-    if (!fileInfo.isFile() || fileInfo.size !== row.size) { await handle.close(); throw new HttpError(500, 'File content is unavailable.'); }
+    try {
+      const fileInfo = await handle.stat(); getNode(id); session(req);
+      if (!fileInfo.isFile() || fileInfo.size !== row.size) throw new HttpError(503, 'File content is unavailable.');
+    } catch (error) { await handle.close(); throw error; }
     res.statusCode = range ? 206 : 200;
     if (req.method === 'HEAD' || row.size === 0) { await handle.close(); res.end(); return; }
     try { await pipeline(handle.createReadStream(range ?? {}), res); }
@@ -369,6 +382,7 @@ export async function createApplication(overrides = {}) {
   }
 
   async function route(req, res) {
+    if (closing) throw new HttpError(503, 'The server is stopping.');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -410,6 +424,39 @@ export async function createApplication(overrides = {}) {
         if (!(method === 'PUT' && url.pathname === '/api/upload')) jsonMutation(req);
       }
       if (url.pathname === '/api/session' && method === 'GET') { respond(res, 200, sessionResponse(activeSession)); return; }
+      if (url.pathname === '/api/trash' && method === 'GET') { respond(res, 200, operations.trashList()); return; }
+      if (url.pathname === '/api/files/bulk' && method === 'POST') {
+        const body = await jsonBody(req); session(req);
+        if (!['trash', 'move', 'copy'].includes(body.action) || Object.keys(body).some(key => !['action', 'ids', 'parent'].includes(key)) ||
+            (body.action === 'trash' ? Object.hasOwn(body, 'parent') : !Object.hasOwn(body, 'parent'))) throw new HttpError(400, 'Provide an action, selected IDs, and a destination for move or copy.');
+        if (body.action === 'trash') { respond(res, 200, await operations.trash(body.ids)); return; }
+        if (body.action === 'move') { respond(res, 200, operations.move(body.ids, body.parent)); return; }
+        const controller = new AbortController(), abort = () => { if (!res.writableEnded) controller.abort(); };
+        res.once('close', abort); req.setTimeout(6 * 60 * 60 * 1000);
+        try { respond(res, 200, await operations.copy(body.ids, body.parent, { signal: controller.signal, authorize: () => session(req) })); }
+        finally { res.off('close', abort); }
+        return;
+      }
+      if (['/api/trash/restore', '/api/trash/purge', '/api/trash/empty'].includes(url.pathname) && method === 'POST') {
+        const body = await jsonBody(req); session(req);
+        const empty = url.pathname.endsWith('/empty');
+        if (Object.keys(body).some(key => empty || key !== 'ids') || (!empty && !Object.hasOwn(body, 'ids'))) throw new HttpError(400, empty ? 'Provide an empty object.' : 'Provide the selected recycle bin IDs.');
+        const result = empty ? await operations.empty() : url.pathname.endsWith('/restore') ? operations.restore(body.ids) : await operations.purge(body.ids);
+        respond(res, 200, result); return;
+      }
+      if (url.pathname === '/api/archive' && ['GET', 'HEAD'].includes(method)) {
+        if (url.searchParams.getAll('ids').length !== 1 || url.searchParams.getAll('download').length !== 1 || url.searchParams.get('download') !== '1' || [...url.searchParams.keys()].some(key => !['ids', 'download'].includes(key))) throw new HttpError(400, 'Provide selected IDs and download=1.');
+        if (archiveControllers.size >= 2) { res.setHeader('Retry-After', '5'); throw new HttpError(429, 'Archive downloads are busy. Try again shortly.'); }
+        const snapshot = operations.archive(url.searchParams.get('ids').split(','));
+        const controller = new AbortController(), abort = () => { if (!res.writableEnded) controller.abort(); };
+        archiveControllers.add(controller); res.once('close', abort);
+        try {
+          const entries = snapshot.entries.map(entry => ({ ...entry, open: async () => { session(req); return entry.open(); } }));
+          const prepared = await prepareArchive(entries); session(req);
+          await streamArchive({ req, res, entries: prepared, signal: controller.signal });
+        } finally { archiveControllers.delete(controller); res.off('close', abort); snapshot.release(); }
+        return;
+      }
       if (url.pathname === '/api/admin/settings' && method === 'GET') { respond(res, 200, settings.snapshot()); return; }
       if (url.pathname === '/api/admin/settings' && method === 'PATCH') {
         const body = await jsonBody(req);
@@ -452,7 +499,7 @@ export async function createApplication(overrides = {}) {
         const type = url.searchParams.get('type') ?? 'all';
         if (q.length > 255 || !['all', 'image', 'video', 'audio', 'documents'].includes(type)) throw new HttpError(400, 'Invalid search filter.');
         const parameters = [];
-        let where = "status='ready'";
+        let where = "status='ready' AND deleted_at IS NULL";
         if (!q && type === 'all') { where += ' AND parent IS ?'; parameters.push(parent); }
         if (q) { where += ' AND instr(casefold(name), casefold(?)) > 0'; parameters.push(q); }
         if (type !== 'all') {
@@ -473,7 +520,9 @@ export async function createApplication(overrides = {}) {
       }
       if (url.pathname === '/api/folders' && method === 'POST') {
         const body = await jsonBody(req);
+        session(req);
         const parent = parentId(body.parent ?? 'root'), name = validateName(body.name);
+        operations.assertWritable(parent);
         // Bound folder nesting to keep recursive operations and navigation usable.
         let depth = 0, cursor = parent;
         while (cursor) { depth++; cursor = db.prepare('SELECT parent FROM nodes WHERE id=?').get(cursor)?.parent; }
@@ -498,6 +547,7 @@ export async function createApplication(overrides = {}) {
             socketPath: overrides.presentationRendererSocket ?? process.env.PRESENTATION_RENDERER_SOCKET, signal: controller.signal });
           // Conversion may outlive a password reset or session expiry.
           session(req);
+          getNode(row.id);
           if (res.destroyed) return;
           res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': pdf.length, 'Accept-Ranges': 'none',
             'Content-Disposition': 'inline; filename="preview.pdf"', 'Content-Security-Policy': "default-src 'none'; sandbox" });
@@ -519,7 +569,9 @@ export async function createApplication(overrides = {}) {
           previewsInFlight++;
           try {
             const { createTextPreview } = await import('./preview.js');
-            respond(res, 200, await createTextPreview({ filePath, name: row.name, size: row.size }));
+            const preview = await createTextPreview({ filePath, name: row.name, size: row.size });
+            session(req); getNode(row.id);
+            respond(res, 200, preview);
           } finally { previewsInFlight--; }
         } finally { await handle.close(); }
         return;
@@ -528,7 +580,9 @@ export async function createApplication(overrides = {}) {
       if (contentMatch && ['GET', 'HEAD'].includes(method)) { await streamContent(req, res, url, contentMatch[1]); return; }
       const nodeMatch = /^\/api\/files\/([^/]+)$/.exec(url.pathname);
       if (nodeMatch && method === 'PATCH') {
-        const body = await jsonBody(req), row = getNode(nodeMatch[1]), name = validateName(body.name);
+        const body = await jsonBody(req); session(req);
+        const row = getNode(nodeMatch[1]), name = validateName(body.name);
+        operations.assertWritable(row.id, row.kind === 'folder');
         const mime = row.kind === 'file' ? mimeForName(name) : '';
         const now = new Date().toISOString();
         try { db.prepare('UPDATE nodes SET name=?,mime=?,updated_at=? WHERE id=?').run(name, mime, now, row.id); }
@@ -536,24 +590,7 @@ export async function createApplication(overrides = {}) {
         respond(res, 200, publicItem({ ...row, name, mime, updated_at: now })); return;
       }
       if (nodeMatch && method === 'DELETE') {
-        const row = getNode(nodeMatch[1]);
-        const descendants = db.prepare(`WITH RECURSIVE tree AS (
-          SELECT id,kind,status,storage_id FROM nodes WHERE id=? UNION ALL
-          SELECT n.id,n.kind,n.status,n.storage_id FROM nodes n JOIN tree t ON n.parent=t.id
-        ) SELECT * FROM tree`).all(row.id);
-        const deletionPaths = new Map(descendants.filter(child => child.kind === 'file' && child.status === 'ready')
-          .map(child => [child.id, storage.blobPath(child, { requireFile: false })]));
-        for (const child of descendants) activeUploads.get(child.id)?.controller.abort();
-        db.prepare('DELETE FROM nodes WHERE id=?').run(row.id);
-        const pending = [];
-        for (const child of descendants) {
-          if (activeUploads.has(child.id)) pending.push(activeUploads.get(child.id).done);
-          if (child.kind === 'file' && child.status === 'ready') {
-            try { storage.locationPath(child.storage_id); await unlink(deletionPaths.get(child.id)); }
-            catch (error) { if (error.code !== 'ENOENT') config.logger.error('Could not remove a deleted blob:', error); }
-          }
-        }
-        await Promise.all(pending);
+        await operations.trash([nodeMatch[1]]);
         respond(res, 204); return;
       }
       throw new HttpError(404, 'API endpoint not found.');
@@ -592,7 +629,7 @@ export async function createApplication(overrides = {}) {
 
   const server = http.createServer({ maxHeaderSize: 16 * 1024, headersTimeout: 15000,
     requestTimeout: 6 * 60 * 60 * 1000, keepAliveTimeout: 5000 }, (req, res) => {
-    route(req, res).catch(error => {
+    const request = route(req, res).catch(error => {
       if (res.destroyed || res.writableEnded) return;
       if (res.headersSent) { res.destroy(); return; }
       const status = error.status ?? (error.code === 'ECONNRESET' ? 400 : error.code === 'ENOSPC' ? 507 : 500);
@@ -601,31 +638,37 @@ export async function createApplication(overrides = {}) {
       res.removeHeader('Content-Length'); res.removeHeader('Content-Disposition');
       respond(res, status, { error: status === 500 ? 'Something went wrong. Please try again.' : error.code === 'ENOSPC' ? 'The server storage is full.' : error.message });
       req.resume();
-    });
+    }).finally(() => { activeRequests.delete(request); });
+    activeRequests.add(request);
   });
   // Allow large transfers for six hours, while dropping stalled sockets after
   // one minute without network activity. Streaming uploads are also count-capped.
   server.setTimeout(60000, socket => socket.destroy());
   server.maxConnections = 200;
+  const retentionTimer = setInterval(() => { operations.cleanup().catch(error => config.logger.error('Recycle bin cleanup failed:', error)); }, 3600000);
+  retentionTimer.unref();
   server.on('clientError', (error, socket) => { if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'); });
   let closed;
   async function close() {
     if (closed) return closed;
     closed = (async () => {
       closing = true;
+      clearInterval(retentionTimer);
+      for (const controller of archiveControllers) controller.abort();
       for (const pending of activeUploads.values()) pending.controller.abort();
+      const operationsStopped = operations.close();
       const requestsStopped = new Promise(resolve => {
         if (!server.listening) { resolve(); return; }
         server.close(resolve); server.closeIdleConnections();
       });
-      await Promise.all([...activeUploads.values()].map(pending => pending.done));
       server.closeAllConnections();
+      await Promise.allSettled([operationsStopped, ...activeRequests, ...[...activeUploads.values()].map(pending => pending.done)]);
       await requestsStopped;
       db.close();
     })();
     return closed;
   }
-  return { server, close, config };
+  return { server, close, config, cleanupTrash: operations.cleanup };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

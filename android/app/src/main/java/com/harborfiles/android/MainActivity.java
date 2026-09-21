@@ -42,6 +42,9 @@ import java.util.LinkedHashSet;
 public final class MainActivity extends Activity {
     static final int PICK_UPLOAD = 201;
     static final int SAVE_DOWNLOAD = 202;
+    // SDK35 source defines this hidden value; it becomes public in API37.
+    // https://developer.android.com/reference/android/webkit/WebChromeClient.FileChooserParams#MODE_OPEN_FOLDER
+    private static final int FILE_CHOOSER_OPEN_FOLDER = 2;
     private SharedPreferences preferences;
     private WebView webView;
     private ServerOrigin origin;
@@ -170,6 +173,7 @@ public final class MainActivity extends Activity {
         findViewById(R.id.change_server_button).setOnClickListener(view -> confirmServerChange());
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG);
         WebSettings settings = webView.getSettings();
+        settings.setUserAgentString(settings.getUserAgentString() + " HarborAndroid/" + BuildConfig.VERSION_NAME);
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);
@@ -266,6 +270,13 @@ public final class MainActivity extends Activity {
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (generation != serverGeneration || leavingServer) { callback.onReceiveValue(null); return true; }
                 cancelFileChooser();
+                int mode = params.getMode();
+                if (mode != FileChooserParams.MODE_OPEN && mode != FileChooserParams.MODE_OPEN_MULTIPLE) {
+                    callback.onReceiveValue(null);
+                    toast(mode == FILE_CHOOSER_OPEN_FOLDER ? "Use a desktop browser for folder uploads."
+                            : "This file picker mode is not supported. Choose files using Upload.");
+                    return true;
+                }
                 uploadCallback = callback;
                 uploadGeneration = generation;
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);

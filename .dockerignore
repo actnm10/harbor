@@ -5,6 +5,8 @@
 !admin.js
 !settings.js
 !storage.js
+!file-operations.js
+!archive.js
 !preflight.js
 !preview.js
 !preview-worker.js

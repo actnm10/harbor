@@ -179,6 +179,34 @@ public final class HarborWebViewTest {
         assertEquals(1, fixture.acceptedWrites.get());
     }
 
+    @Test public void folderChooserRequestsCancelWithoutOpeningAFlatFilePicker() throws Exception {
+        launch(fixture.origin()); signIn();
+        assertTrue(textJs("navigator.userAgent").contains("HarborAndroid/" + BuildConfig.VERSION_NAME));
+        java.util.concurrent.atomic.AtomicInteger cancellations = new java.util.concurrent.atomic.AtomicInteger();
+        Intent result = new Intent().setData(FixtureDocumentProvider.UPLOAD).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        Instrumentation.ActivityMonitor monitor = pickerMonitor(Intent.ACTION_OPEN_DOCUMENT, result);
+        try {
+            scenario.onActivity(activity -> {
+                WebView web = activity.findViewById(R.id.web_view);
+                for (int mode : new int[] {2, 3, 99}) {
+                    android.webkit.WebChromeClient.FileChooserParams params = new android.webkit.WebChromeClient.FileChooserParams() {
+                        @Override public int getMode() { return mode; }
+                        @Override public String[] getAcceptTypes() { return new String[0]; }
+                        @Override public boolean isCaptureEnabled() { return false; }
+                        @Override public CharSequence getTitle() { return null; }
+                        @Override public String getFilenameHint() { return null; }
+                        @Override public Intent createIntent() { throw new AssertionError("Unsupported chooser intent requested"); }
+                    };
+                    assertTrue(web.getWebChromeClient().onShowFileChooser(web, uris -> {
+                        assertNull(uris); cancellations.incrementAndGet();
+                    }, params));
+                }
+            });
+            assertEquals(3, cancellations.get());
+            assertEquals("Folder upload must not open a flat file picker", 0, monitor.getHits());
+        } finally { instrumentation.removeMonitor(monitor); }
+    }
+
     @Test public void downloadPickerWritesAuthenticatedBytesToSelectedDocument() throws Exception {
         launch(fixture.origin()); signIn();
         Intent result = new Intent().setData(FixtureDocumentProvider.DOWNLOAD).addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
@@ -191,6 +219,30 @@ public final class HarborWebViewTest {
         assertArrayEquals(LoopbackHttpsFixture.FILE_BYTES, downloadedBytes());
         assertTrue(fixture.requests.stream().filter(request -> request.path.equals(LoopbackHttpsFixture.DOWNLOAD_PATH))
                 .allMatch(request -> request.headers.getOrDefault("cookie", "").contains(LoopbackHttpsFixture.COOKIE)));
+    }
+
+    @Test public void archivePickerSavesAuthenticatedZipWithUnicodeNamesAndExactBytes() throws Exception {
+        launch(fixture.origin()); signIn();
+        Intent result = new Intent().setData(FixtureDocumentProvider.DOWNLOAD).addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        Instrumentation.ActivityMonitor monitor = pickerMonitor(Intent.ACTION_CREATE_DOCUMENT, result);
+        try {
+            tapWebElement("fixture-archive");
+            await("archive save picker callback", () -> monitor.getHits() > 0);
+            await("downloaded archive bytes", () -> Arrays.equals(LoopbackHttpsFixture.ARCHIVE_BYTES, downloadedBytes()));
+        } finally { instrumentation.removeMonitor(monitor); }
+        assertArrayEquals(LoopbackHttpsFixture.ARCHIVE_BYTES, downloadedBytes());
+        assertTrue(fixture.requests.stream().anyMatch(request -> request.path.equals(LoopbackHttpsFixture.ARCHIVE_PATH)
+                && request.headers.getOrDefault("cookie", "").contains(LoopbackHttpsFixture.COOKIE)));
+        try (java.util.zip.ZipInputStream zip = new java.util.zip.ZipInputStream(
+                new java.io.ByteArrayInputStream(downloadedBytes()), java.nio.charset.StandardCharsets.UTF_8)) {
+            assertEquals("京都/", zip.getNextEntry().getName());
+            assertEquals("京都/fixture.bin", zip.getNextEntry().getName());
+            ByteArrayOutputStream content = new ByteArrayOutputStream();
+            for (int value; (value = zip.read()) != -1;) content.write(value);
+            assertArrayEquals(LoopbackHttpsFixture.FILE_BYTES, content.toByteArray());
+            assertEquals("empty/", zip.getNextEntry().getName());
+            assertNull(zip.getNextEntry());
+        }
     }
 
     @Test public void shippedPdfJsRendersRealPdfAndSelectableTextOnAndroidWebView() throws Exception {

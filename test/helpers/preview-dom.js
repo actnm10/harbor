@@ -27,6 +27,7 @@ export function createDom(html = '', theme = 'light') {
       }
     }
     replaceChildren(...children) { this.text = ''; this.children = []; this.append(...children); }
+    prepend(...children) { const previous = this.children; this.children = []; this.append(...children); this.children.push(...previous); }
     insertBefore(child, sibling) { const index = this.children.indexOf(sibling); assert.ok(index >= 0); this.children.splice(index, 0, child); child.parent = this; }
     remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); }
     setAttribute(name, value) { this.attributes.set(name, String(value)); }
@@ -43,6 +44,8 @@ export function createDom(html = '', theme = 'light') {
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
     contains(child) { return child === this || this.children.some(entry => entry.contains(child)); }
     focus() { document.activeElement = this; }
+    select() {} reset() {} scrollIntoView() {}
+    click() { void this.emit('click'); }
     getContext() { return {}; }
     pause() {} load() {}
     showModal() { this.open = true; }
@@ -53,7 +56,7 @@ export function createDom(html = '', theme = 'light') {
   }
   const $ = id => { assert.ok(elements.has(id), `Missing real HTML element: ${id}`); return elements.get(id); };
   document = {
-    documentElement: new Element('html'), activeElement: null, getElementById: $, querySelectorAll: () => [],
+    documentElement: new Element('html'), body: new Element('body'), activeElement: null, getElementById: $, querySelectorAll: () => [],
     createElement: tag => new Element(tag), createElementNS: (_ns, tag) => new Element(tag),
     createDocumentFragment: () => new Element('#fragment'), createTextNode: text => Object.assign(new Element('#text'), { textContent: text }),
   };

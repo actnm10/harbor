@@ -45,6 +45,7 @@ export function loadConfig(overrides = {}, env = process.env) {
     maxStorageBytes: integer(overrides.maxStorageBytes ?? env.MAX_STORAGE_BYTES ?? 100 * GiB, 'MAX_STORAGE_BYTES', 1, Number.MAX_SAFE_INTEGER),
     maxConcurrentUploads: integer(overrides.maxConcurrentUploads ?? env.MAX_CONCURRENT_UPLOADS ?? 4, 'MAX_CONCURRENT_UPLOADS', 1, 64),
     sessionHours: integer(overrides.sessionHours ?? env.SESSION_HOURS ?? 12, 'SESSION_HOURS', 1, 720),
+    trashRetentionDays: integer(overrides.trashRetentionDays ?? env.TRASH_RETENTION_DAYS ?? 30, 'TRASH_RETENTION_DAYS', 1, 365),
     loginAttempts: integer(overrides.loginAttempts ?? 10, 'loginAttempts', 1, 1000),
     loginWindowMs: integer(overrides.loginWindowMs ?? 15 * 60 * 1000, 'loginWindowMs', 1, 86400000),
     loginBlockMs: integer(overrides.loginBlockMs ?? 15 * 60 * 1000, 'loginBlockMs', 1, 86400000),
@@ -112,7 +113,6 @@ export function openDatabase(dataDir) {
       id TEXT PRIMARY KEY, label TEXT NOT NULL, relative_path TEXT UNIQUE, created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE UNIQUE INDEX IF NOT EXISTS nodes_sibling_name ON nodes(COALESCE(parent, ''), name COLLATE NOCASE);
     CREATE INDEX IF NOT EXISTS nodes_parent ON nodes(parent);
     CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
   `);
@@ -122,6 +122,17 @@ export function openDatabase(dataDir) {
   if (!db.prepare('PRAGMA table_info(nodes)').all().some(column => column.name === 'storage_id')) {
     db.exec("ALTER TABLE nodes ADD COLUMN storage_id TEXT NOT NULL DEFAULT 'original'");
   }
+  const nodeColumns = new Set(db.prepare('PRAGMA table_info(nodes)').all().map(column => column.name));
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const [name, definition] of Object.entries({ deleted_at: 'TEXT', original_parent: 'TEXT', original_path: 'TEXT', trash_root: 'INTEGER NOT NULL DEFAULT 0', purge_pending: 'INTEGER NOT NULL DEFAULT 0' })) {
+      if (!nodeColumns.has(name)) db.exec(`ALTER TABLE nodes ADD COLUMN ${name} ${definition}`);
+    }
+    const siblingIndex = db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='nodes_sibling_name'").get();
+    if (!siblingIndex?.sql.includes('deleted_at IS NULL')) db.exec("DROP INDEX IF EXISTS nodes_sibling_name; CREATE UNIQUE INDEX nodes_sibling_name ON nodes(COALESCE(parent, ''), name COLLATE NOCASE) WHERE deleted_at IS NULL");
+    db.exec('CREATE INDEX IF NOT EXISTS nodes_trash ON nodes(trash_root,deleted_at)');
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
   db.prepare("INSERT OR IGNORE INTO storage_locations(id,label,relative_path,created_at) VALUES('original','Original storage',NULL,?)").run(new Date().toISOString());
   db.exec('CREATE INDEX IF NOT EXISTS nodes_storage ON nodes(storage_id)');
   return db;
