@@ -48,6 +48,8 @@ export function loadConfig(overrides = {}, env = process.env) {
     loginAttempts: integer(overrides.loginAttempts ?? 10, 'loginAttempts', 1, 1000),
     loginWindowMs: integer(overrides.loginWindowMs ?? 15 * 60 * 1000, 'loginWindowMs', 1, 86400000),
     loginBlockMs: integer(overrides.loginBlockMs ?? 15 * 60 * 1000, 'loginBlockMs', 1, 86400000),
+    loginBurstAttempts: integer(overrides.loginBurstAttempts ?? 30, 'loginBurstAttempts', 1, 10000),
+    loginBurstWindowMs: integer(overrides.loginBurstWindowMs ?? 60000, 'loginBurstWindowMs', 1, 86400000),
     logger: overrides.logger ?? console,
   };
   config.storageRoot = path.resolve(overrides.storageRoot ?? env.STORAGE_ROOT ?? path.join(config.dataDir, 'storage'));
@@ -164,12 +166,14 @@ export async function resetOwnerPassword(dataDir, password) {
   const passwordHash = await hashPassword(password);
   const db = openDatabase(path.resolve(dataDir));
   try {
-    if (!db.prepare('SELECT id FROM owner').get()) throw new Error('No owner exists. Run init first.');
+    const owner = db.prepare('SELECT id, username FROM owner WHERE id = 1').get();
+    if (!owner) throw new Error('No owner exists. Run init first.');
     db.exec('BEGIN IMMEDIATE');
     try {
       db.prepare('UPDATE owner SET password_hash = ? WHERE id = 1').run(passwordHash);
       db.exec('DELETE FROM sessions; COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
+    return { username: owner.username };
   } finally { db.close(); }
 }
 

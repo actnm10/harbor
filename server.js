@@ -62,6 +62,9 @@ export async function createApplication(overrides = {}) {
   db.function('casefold', { deterministic: true }, value => typeof value === 'string' ? value.toLowerCase() : value);
   const activeUploads = new Map();
   const loginBuckets = new Map();
+  const loginBurstBuckets = new Map();
+  let credentialHash = db.prepare('SELECT password_hash FROM owner WHERE id = 1').get()?.password_hash;
+  let credentialGeneration = 0;
   let authInFlight = 0, previewsInFlight = 0, reservedBytes = 0, closing = false;
   let storage, settings;
   try {
@@ -139,38 +142,99 @@ export async function createApplication(overrides = {}) {
     return req.socket.remoteAddress ?? 'unknown';
   }
 
+  function authenticationOwner() {
+    const owner = db.prepare('SELECT * FROM owner WHERE id = 1').get();
+    if (owner?.password_hash !== credentialHash) {
+      credentialHash = owner?.password_hash;
+      credentialGeneration++;
+      // Offline recovery invalidates failed guesses against the old password.
+      // Keep the independent burst guard, including during repeated resets.
+      loginBuckets.clear();
+    }
+    return owner;
+  }
+
+  function busyAuthentication(res) {
+    res.setHeader('Retry-After', '2');
+    throw new HttpError(429, 'Sign-in is busy. Try again shortly.');
+  }
+
   function throttle(req, res) {
     const now = Date.now();
-    if (loginBuckets.size > 5000) {
-      for (const [key, bucket] of loginBuckets) {
-        if (now >= bucket.until && now >= bucket.start + config.loginWindowMs) loginBuckets.delete(key);
+    if (loginBurstBuckets.size > 5000) {
+      for (const [key, bucket] of loginBurstBuckets) {
+        if (now >= bucket.start + config.loginBurstWindowMs) loginBurstBuckets.delete(key);
       }
     }
     const ip = clientIP(req);
-    const keys = [[ip, config.loginAttempts], ['global', config.loginAttempts * 20]];
+    const keys = [[ip, config.loginBurstAttempts], ['global', config.loginBurstAttempts * 20]];
+    if (loginBurstBuckets.size >= 10000 && !loginBurstBuckets.has(ip)) {
+      res.setHeader('Retry-After', Math.ceil(config.loginBurstWindowMs / 1000));
+      throw new HttpError(429, 'Too many sign-in attempts. Try again later.');
+    }
+    const buckets = [];
+    for (const [key, limit] of keys) {
+      let bucket = loginBurstBuckets.get(key);
+      if (!bucket || now >= bucket.start + config.loginBurstWindowMs) {
+        bucket = { start: now, count: 0 }; loginBurstBuckets.set(key, bucket);
+      }
+      if (bucket.count >= limit) {
+        res.setHeader('Retry-After', Math.max(1, Math.ceil((bucket.start + config.loginBurstWindowMs - now) / 1000)));
+        throw new HttpError(429, 'Too many sign-in attempts. Try again later.');
+      }
+      buckets.push(bucket);
+    }
+    for (const bucket of buckets) bucket.count++;
+  }
+
+  function expireFailures(bucket, now) {
+    if (bucket.until ? now >= bucket.until : now >= bucket.start + config.loginWindowMs) {
+      bucket.start = now; bucket.count = 0; bucket.until = 0;
+    }
+  }
+
+  function enterAuthentication(req, res) {
+    const now = Date.now(), ip = clientIP(req);
+    if (loginBuckets.size > 5000) {
+      for (const [key, bucket] of loginBuckets) {
+        if (!bucket.pending && now >= bucket.until && now >= bucket.start + config.loginWindowMs) loginBuckets.delete(key);
+      }
+    }
     if (loginBuckets.size >= 10000 && !loginBuckets.has(ip)) {
       res.setHeader('Retry-After', Math.ceil(config.loginWindowMs / 1000));
       throw new HttpError(429, 'Too many sign-in attempts. Try again later.');
     }
-    for (const [key, limit] of keys) {
+    const buckets = [];
+    for (const [key, limit] of [[ip, config.loginAttempts], ['global', config.loginAttempts * 20]]) {
       let bucket = loginBuckets.get(key);
-      if (!bucket || (now >= bucket.until && now >= bucket.start + config.loginWindowMs)) {
-        bucket = { start: now, count: 0, until: 0 }; loginBuckets.set(key, bucket);
+      if (!bucket) {
+        bucket = { start: now, count: 0, pending: 0, until: 0 }; loginBuckets.set(key, bucket);
       }
-      if (now < bucket.until || bucket.count >= limit) {
-        if (now >= bucket.until) bucket.until = now + config.loginBlockMs;
+      expireFailures(bucket, now);
+      if (now < bucket.until) {
         res.setHeader('Retry-After', Math.max(1, Math.ceil((bucket.until - now) / 1000)));
-        throw new HttpError(429, 'Too many sign-in attempts. Try again later.');
+        throw new HttpError(429, 'Too many failed sign-in attempts. Try again later.');
       }
-      bucket.count++;
+      if (bucket.count + bucket.pending >= limit) busyAuthentication(res);
+      buckets.push({ bucket, limit });
     }
+    if (authInFlight >= 2) busyAuthentication(res);
+    for (const { bucket } of buckets) bucket.pending++;
+    authInFlight++;
+    return { buckets, generation: credentialGeneration };
   }
 
-  function enterAuthentication(res) {
-    if (authInFlight >= 2) {
-      res.setHeader('Retry-After', '2'); throw new HttpError(429, 'Sign-in is busy. Try again shortly.');
+  function finishAuthentication(attempt, failed) {
+    authInFlight--;
+    for (const { bucket } of attempt.buckets) bucket.pending--;
+    authenticationOwner();
+    if (!failed || attempt.generation !== credentialGeneration) return;
+    const now = Date.now();
+    for (const { bucket, limit } of attempt.buckets) {
+      expireFailures(bucket, now);
+      bucket.count++;
+      if (bucket.count >= limit) bucket.until = now + config.loginBlockMs;
     }
-    authInFlight++;
   }
 
   function insertNode(row) {
@@ -318,12 +382,13 @@ export async function createApplication(overrides = {}) {
     if (url.pathname === '/api/login' && method === 'POST') {
       originCheck(req); throttle(req, res);
       const body = await jsonBody(req);
-      const owner = db.prepare('SELECT * FROM owner WHERE id = 1').get();
-      enterAuthentication(res);
+      const owner = authenticationOwner();
+      const attempt = enterAuthentication(req, res);
+      const usernameMatches = !!owner && safeEqual(body.username, owner.username);
       let valid;
       try { valid = await verifyPassword(body.password, owner?.password_hash ?? dummyHash); }
-      finally { authInFlight--; }
-      if (!owner || !valid || !safeEqual(body.username, owner.username)) throw new HttpError(401, 'Incorrect username or password.');
+      finally { finishAuthentication(attempt, valid === false || (valid === true && !usernameMatches)); }
+      if (!owner || !valid || !usernameMatches) throw new HttpError(401, 'Incorrect username or password.');
       // Password reset may happen while scrypt is running in another worker.
       if (db.prepare('SELECT password_hash FROM owner WHERE id=1').get()?.password_hash !== owner.password_hash) throw new HttpError(401, 'Please try signing in again.');
       const token = randomBytes(32).toString('base64url'), csrf = randomBytes(32).toString('base64url');
@@ -363,13 +428,13 @@ export async function createApplication(overrides = {}) {
       if (url.pathname === '/api/password' && method === 'POST') {
         throttle(req, res);
         const body = await jsonBody(req); validatePassword(body.newPassword);
-        const owner = db.prepare('SELECT * FROM owner WHERE id=1').get();
-        enterAuthentication(res);
+        const owner = authenticationOwner();
+        const attempt = enterAuthentication(req, res);
         let valid, passwordHash;
         try {
           valid = await verifyPassword(body.currentPassword, owner.password_hash);
           if (valid) passwordHash = await hashPassword(body.newPassword);
-        } finally { authInFlight--; }
+        } finally { finishAuthentication(attempt, valid === false); }
         if (!valid) throw new HttpError(401, 'The current password is incorrect.');
         if (db.prepare('SELECT password_hash FROM owner WHERE id=1').get()?.password_hash !== owner.password_hash ||
             !db.prepare('SELECT token_hash FROM sessions WHERE token_hash=? AND expires_at>?').get(activeSession.token_hash, Date.now())) {

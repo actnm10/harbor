@@ -3,9 +3,11 @@ import { mkdirSync, readdirSync, lstatSync, realpathSync, readFileSync, writeFil
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { HttpError } from './lib.js';
+import { checkWritableDirectory, explainFilesystemError } from './preflight.js';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const markerName = '.harbor-location.json';
+const accessErrors = new Set(['EACCES', 'EPERM', 'EROFS', 'ENOSPC', 'EDQUOT']);
 
 function samePath(a, b) { return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b; }
 
@@ -16,7 +18,10 @@ function directory(candidate) {
       throw new Error('Not a real directory.');
     }
     return candidate;
-  } catch { throw new HttpError(503, 'A configured storage directory is missing or unsafe. Restore its mount and restart Harbor.'); }
+  } catch (error) {
+    if (accessErrors.has(error.code)) throw error;
+    throw new HttpError(503, 'A configured storage directory is missing or unsafe. Restore its mount and restart Harbor.');
+  }
 }
 
 function exists(candidate) {
@@ -43,7 +48,10 @@ function checkMarker(candidate, id) {
     if (!info.isFile() || info.isSymbolicLink() || info.size > 1024) throw new Error('Invalid marker.');
     const value = JSON.parse(readFileSync(marker, 'utf8'));
     if (value.version !== 1 || value.id !== id) throw new Error('Wrong marker.');
-  } catch { throw new HttpError(503, 'A configured storage location is missing its identity marker. Restore the correct storage mount.'); }
+  } catch (error) {
+    if (accessErrors.has(error.code)) throw error;
+    throw new HttpError(503, 'A configured storage location is missing its identity marker. Restore the correct storage mount.');
+  }
 }
 
 export function validateStorageName(name) {
@@ -55,6 +63,15 @@ export function validateStorageName(name) {
 }
 
 export function createStorageManager(db, config) {
+  try { return initializeStorageManager(db, config); }
+  catch (error) {
+    const candidate = error.path && path.resolve(error.path);
+    const inStorage = candidate && (samePath(candidate, config.storageRoot) || candidate.startsWith(config.storageRoot + path.sep));
+    throw explainFilesystemError(error, inStorage ? config.storageRoot : config.dataDir, inStorage ? 'STORAGE_PATH' : 'DATA_PATH');
+  }
+}
+
+function initializeStorageManager(db, config) {
   const root = config.storageRoot;
   const original = path.join(config.dataDir, 'blobs');
   if (samePath(root, config.dataDir) || samePath(root, original) || root.startsWith(original + path.sep)) {
@@ -99,6 +116,10 @@ export function createStorageManager(db, config) {
 
   // Validate every mount before changing metadata or cleaning any incomplete file.
   for (const row of db.prepare('SELECT id FROM storage_locations').all()) locationPath(row.id);
+  checkWritableDirectory(root, { setting: 'STORAGE_PATH' });
+  for (const row of db.prepare('SELECT id FROM storage_locations').all()) {
+    checkWritableDirectory(locationPath(row.id), { setting: row.id === 'original' ? 'DATA_PATH' : 'STORAGE_PATH' });
+  }
   db.prepare("INSERT OR REPLACE INTO app_meta(key,value) VALUES('storage_initialized','1')").run();
 
   function cleanIncomplete() {

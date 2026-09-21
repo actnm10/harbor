@@ -2,6 +2,7 @@ import readline from 'node:readline';
 import { stdin, stdout } from 'node:process';
 import path from 'node:path';
 import { initializeOwner, resetOwnerPassword, validatePassword } from './lib.js';
+import { checkInstallation } from './preflight.js';
 
 async function prompt(label, hidden = false) {
   if (!stdin.isTTY || !stdout.isTTY) throw new Error('Run this command in an interactive terminal. Passwords are never accepted through command arguments.');
@@ -61,18 +62,29 @@ async function prompt(label, hidden = false) {
 
 try {
   const command = process.argv[2];
-  if (!['init', 'reset-password'].includes(command) || process.argv.length !== 3) {
-    throw new Error('Usage: node admin.js init | reset-password');
+  if (!['check', 'init', 'reset-password'].includes(command) || process.argv.length !== 3) {
+    throw new Error('Usage: node admin.js check | init | reset-password');
   }
-  const username = command === 'init' ? (await prompt('Owner username: ')).trim() : null;
-  const password = await prompt('Password (15–128 characters; hidden): ', true);
-  validatePassword(password);
-  const confirmation = await prompt('Repeat password (hidden): ', true);
-  if (password !== confirmation) throw new Error('Passwords do not match. No changes were made.');
-  const dataDir = path.resolve(process.env.DATA_DIR ?? './data');
-  if (command === 'init') await initializeOwner(dataDir, username, password);
-  else await resetOwnerPassword(dataDir, password);
-  stdout.write(command === 'init' ? 'Owner created. You can now sign in to Harbor.\n' : 'Password reset. All existing sessions have been signed out.\n');
+  if (command === 'check') {
+    const checked = checkInstallation();
+    stdout.write(`Installation check passed.\nData directory: ${JSON.stringify(checked.dataDir)}\nStorage root: ${JSON.stringify(checked.storageRoot)}\nPublic address: ${checked.appOrigin}\n`);
+  } else {
+    // Recovery remains available even when origin or file storage needs repair.
+    if (command === 'init') checkInstallation();
+    const username = command === 'init' ? (await prompt('Owner username: ')).trim() : null;
+    const password = await prompt('Password (15–128 characters; hidden): ', true);
+    validatePassword(password);
+    const confirmation = await prompt('Repeat password (hidden): ', true);
+    if (password !== confirmation) throw new Error('Passwords do not match. No changes were made.');
+    const dataDir = path.resolve(process.env.DATA_DIR ?? './data');
+    if (command === 'init') {
+      await initializeOwner(dataDir, username, password);
+      stdout.write(`Owner created. Sign in as ${JSON.stringify(username)}.\n`);
+    } else {
+      const owner = await resetOwnerPassword(dataDir, password);
+      stdout.write(`Password reset for ${JSON.stringify(owner.username)}. All existing sessions have been signed out.\n`);
+    }
+  }
 } catch (error) {
   console.error(error.message); process.exitCode = 1;
 }

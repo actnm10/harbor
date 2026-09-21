@@ -4,6 +4,12 @@
 
 - Keep the account setup username prompt visible when readline redraws the terminal.
 - Exit account setup and password recovery cleanly on Ctrl+C or end of input, with terminal state restored and no unsettled-await warning.
+- Check configuration and storage write access before prompting to create an owner; add a noninteractive `admin.js check` command and actionable mount-permission errors.
+- Check write access to registered storage locations at startup, including mounts whose permissions changed after installation.
+- Count only failed credentials toward password lockouts, while retaining independent request-burst and concurrent-password checks.
+- Clear stale failed-password lockouts after console password recovery without restarting the app, and report the exact stored username.
+- Recover once from a stale browser security token after another tab signs in, and show the server's retry time for authentication throttling.
+- Prevent phone keyboards from autocapitalizing or autocorrecting case-sensitive usernames.
 
 ## 0.1alpha
 

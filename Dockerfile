@@ -6,7 +6,7 @@ RUN npm install --global pnpm@11.19.0 --ignore-scripts \
     && mkdir -p /data /storage && chown node:node /data /storage
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts --no-optional
-COPY --chown=node:node server.js lib.js admin.js settings.js storage.js preview.js preview-worker.js ./
+COPY --chown=node:node server.js lib.js admin.js settings.js storage.js preflight.js preview.js preview-worker.js ./
 COPY --chown=node:node public ./public
 USER node
 EXPOSE 3000

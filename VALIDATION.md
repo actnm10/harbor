@@ -2,6 +2,18 @@
 
 Verified on September 20, 2026 using Node.js 24.19.0 on Windows and Node.js 24.21.0 inside Docker on Ubuntu-26.04 / WSL 2.
 
+## Setup and login bug fixes
+
+The final rebuilt Linux image passed all 58 automated tests with no skips in 15.16 seconds using Node.js 24.21.0, UID/GID 1000, a read-only root filesystem and test mount, no network, all capabilities dropped, a 1 GiB memory limit, a 100-process limit, and a 256 MiB temporary filesystem. The full Windows run passed all 54 platform-independent tests in 24.00 seconds; the affected preflight suite was rerun after the final permission-diagnostic adjustment and passed with its four Linux-only cases skipped. The production Docker image built successfully, including the new preflight module.
+
+The follow-up suite adds five authentication regressions, eleven installation/storage checks, and eleven browser-logic checks. Authentication cases exercise real HTTP requests and SQLite: successful sign-ins do not spend failed-password allowance, console password recovery unlocks the running server and revokes old sessions, the independent burst limit survives recovery, and concurrent/delayed guesses cannot exceed the remaining failure allowance.
+
+Installation checks verify noninteractive operation, early failure before account prompts, preservation of stored files and markers, missing-mount and symlink rejection, and temporary probe cleanup. Linux tests run as UID/GID 1000 and cover unwritable roots, registered folders, unreadable identity markers, and non-traversable folders. The four tests that depend on Unix permissions are skipped on Windows and must pass on Linux.
+
+Browser-logic tests execute the shipped JavaScript with small DOM, network, and clock doubles. They cover one-time recovery from the server's explicit pre-action CSRF rejection, simultaneous stale-tab writes, raw upload recovery, no replay on other errors, protection against old responses expiring a newer sign-in, cooldown expiry/cancellation, credential case and whitespace, and mobile username input attributes. These are automated request/control-flow checks, not a new physical Android or manual browser test.
+
+The terminal regression harness was rerun against the updated CLI, preflight, and account modules: all 13 PTY flows passed in 17.59 seconds, including the original erased-prompt negative control. Passwords were generated only for disposable test accounts and never printed. The live WSL instance and the Proxmox deployment were not changed.
+
 ## Automated application checks
 
 All 31 integration tests in `test/server.test.js` pass on both platforms: 18.9 seconds on Windows and 12.2 seconds in the Linux container. Tests run against real HTTP servers, real SQLite databases, and temporary file storage, without bypassing authentication.

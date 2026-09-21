@@ -5,6 +5,7 @@
 !admin.js
 !settings.js
 !storage.js
+!preflight.js
 !preview.js
 !preview-worker.js
 !pnpm-lock.yaml

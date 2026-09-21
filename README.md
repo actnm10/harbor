@@ -67,10 +67,13 @@ The Compose file publishes only Caddy's ports. Do not publish the app's port 300
 
 ```sh
 docker compose build --pull app
+docker compose run --rm --no-deps -T app node admin.js check
 docker compose run --rm --no-deps app node admin.js init
 ```
 
-The account command prompts for a username and a password without displaying the password, dots, or asterisks. Press Enter after each entry. Use a unique passphrase of at least 15 characters. At any prompt, Ctrl+C cancels setup without creating an account. There are no default credentials and no web setup endpoint that someone else can claim. Passwords are hashed; they are not stored in `.env` or the Docker image.
+The installation check verifies the configured public address and tests write access to the data and storage roots as the app's runtime user. It creates and removes temporary probe files, without creating an owner or changing stored files or identity markers. Missing explicit storage mounts are reported rather than created. Account initialization performs the same check before asking for credentials. If it reports a permission problem, correct ownership and write access on the exact Linux guest directory mapped by `DATA_PATH` or `STORAGE_PATH`, then rerun the check. Startup also verifies the saved mount identities and write access to each registered storage folder.
+
+The account command prompts for a username and a password without displaying the password, dots, or asterisks. Press Enter after each entry. Use a unique passphrase of at least 15 characters. At any prompt, Ctrl+C cancels setup without creating an account. The success message confirms the exact username, including capitalization. There are no default credentials and no web setup endpoint that someone else can claim. Passwords are hashed; they are not stored in `.env` or the Docker image.
 
 ## 4. Start Harbor
 
@@ -138,7 +141,9 @@ If you forget it, run this command from your Linux guest:
 docker compose exec app node admin.js reset-password
 ```
 
-If the app is stopped, use `docker compose run --rm --no-deps app node admin.js reset-password`. The command prompts for the new password and revokes all sessions. Anyone with access to the Docker host and storage can administer the account, so secure your guest and Proxmox login accordingly.
+If the app is stopped, use `docker compose run --rm --no-deps app node admin.js reset-password`. The command prompts for the new password twice, confirms the stored username, and revokes all sessions. The username is case-sensitive and does not change. Recovery remains available when the file-storage mount or public-address configuration needs repair, provided the account database is accessible.
+
+After console recovery, refresh the sign-in page to clear any previously displayed countdown, then use the reported username and new password. Password recovery clears the running server's failed-password lockout on the next sign-in without an app restart. The separate short burst limit still applies; if it was reached, wait for the displayed retry time. Successful sign-ins do not consume the allowance for failed passwords. Anyone with access to the Docker host and storage can administer the account, so secure your guest and Proxmox login accordingly.
 
 ## Back up and restore
 
@@ -212,13 +217,13 @@ Default development address: `http://localhost:3000`. Runtime environment variab
 | Symptom | Check |
 | --- | --- |
 | Original 0.1alpha account setup appears stuck after `Container ... Created` | That release can erase its username prompt while still waiting for input. Type your chosen username and press Enter to reach the password prompt, or update `admin.js` from `main` and rebuild the app image. The fix also removes the unsettled-await warning when cancelling. |
-| `app` is unhealthy and Caddy cannot start | Read `docker compose logs --tail=80 app` and `docker inspect --format '{{json .State.Health}}' harbor-app-1`. Account creation does not validate the server settings or `/storage` write access; use the logged error to identify which check failed. The health check uses internal HTTP and does not depend on public DNS or HTTPS. |
-| App cannot write storage | Both paths exist and are writable as UID/GID 1000 inside the guest; inspect bind-mount UID mapping. |
+| `app` is unhealthy and Caddy cannot start | Read `docker compose logs --tail=80 app` and `docker inspect --format '{{json .State.Health}}' harbor-app-1`. Run `docker compose run --rm --no-deps -T app node admin.js check` to check the current configuration and directory write access. Startup also checks registered storage folders and mount identities. The health check uses internal HTTP and does not depend on public DNS or HTTPS. |
+| App cannot write storage | The error identifies the runtime UID/GID and which guest mount setting to check. Ensure both selected paths exist and are writable as UID/GID 1000 inside the Linux guest; inspect Proxmox UID mapping if guest-side ownership cannot be changed. A read-only mount or full disk needs its own correction. |
 | Storage marker or mount error | Restore the correct mounted directory, including hidden `.harbor-location.json` markers. Do not erase markers or initialize a replacement over missing data. |
 | Word or PDF preview unavailable | Check format and size limits; encrypted, damaged, or unsupported documents remain downloadable. |
 | HTTPS certificate fails | DNS points to the guest's public address, ports 80/443 reach Caddy, IPv6 is correct, and no other service occupies the ports. |
 | Login fails or writes return Forbidden | Browse the exact configured hostname and scheme. Verify `APP_ORIGIN` and avoid mixing `localhost` with `127.0.0.1`. |
-| Login temporarily blocked | Wait for the throttle window; check the password and trusted proxy client-IP configuration. |
+| Login temporarily blocked | Wait for the retry time shown on the form. Successful sign-ins do not use the failed-password allowance. Console password recovery clears old-password failure lockouts while retaining short burst protection. Verify the username's exact capitalization and trusted proxy client-IP configuration. |
 | Upload fails | Check the per-file limit, total quota, physical free space, and duplicate names; retry a canceled file. |
 | Video has no picture or sound | The browser may not support its codecs; download and play it locally or convert it outside Harbor. |
 | Caddy shows 502 | Check the app's health and logs; the app stays stopped while a backup archive is created. |

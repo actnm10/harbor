@@ -99,6 +99,35 @@ async function expectError(response, status) {
   assert.equal('stack' in body, false);
 }
 
+async function delayedLogins(f, passwords) {
+  const requests = [], connected = [], completed = [];
+  for (const password of passwords) {
+    const body = JSON.stringify({ username: USERNAME, password });
+    let signalConnected;
+    connected.push(new Promise(resolve => { signalConnected = resolve; }));
+    completed.push(new Promise((resolve, reject) => {
+      const request = http.request(f.url + '/api/login', {
+        method: 'POST', headers: {
+          Origin: ORIGIN, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body),
+        },
+      }, response => { response.resume(); response.on('end', () => resolve(response.statusCode)); });
+      request.on('error', reject);
+      request.on('socket', socket => socket.once('connect', signalConnected));
+      request.flushHeaders();
+      requests.push({ request, body });
+    }));
+  }
+  try {
+    await Promise.all(connected);
+    // Complete every body's credentials together after the headers have arrived.
+    await new Promise(resolve => setTimeout(resolve, 30));
+    for (const { request, body } of requests) request.end(body);
+    return await Promise.all(completed);
+  } finally {
+    for (const { request } of requests) request.destroy();
+  }
+}
+
 test('health is minimal and unauthenticated callers cannot access files or sessions', async t => {
   const f = await fixture(t);
   const health = await f.request('/healthz');
@@ -501,39 +530,76 @@ test('failed logins are rate limited without trusting client-supplied forwarding
       method: 'POST', json: { username: USERNAME, password: 'wrong password' },
       headers: { 'X-Real-IP': `192.0.2.${index + 1}`, 'X-Forwarded-For': `192.0.2.${index + 1}` },
     });
-    assert.ok([401, 429].includes(response.status));
+    await expectError(response, 401);
   }
   const blocked = await f.login();
   await expectError(blocked, 429);
   assert.ok(Number(blocked.headers.get('retry-after')) > 0);
 });
 
+test('successful sign-ins neither consume nor clear the failed-credential allowance', async t => {
+  const f = await fixture(t, { loginAttempts: 3, loginWindowMs: 60_000, loginBlockMs: 60_000 });
+  for (let index = 0; index < 5; index++) {
+    assert.equal((await f.login()).status, 200, 'ordinary successful sign-ins must not cause a failure lockout');
+  }
+  await expectError(await f.login('incorrect password'), 401);
+  assert.equal((await f.login()).status, 200);
+  await expectError(await f.login('incorrect password'), 401);
+  await expectError(await f.login('incorrect password'), 401);
+  const blocked = await f.login();
+  await expectError(blocked, 429);
+  assert.ok(Number(blocked.headers.get('retry-after')) > 0);
+});
+
+test('a console password reset clears a running server failure lockout and revokes old sessions', async t => {
+  const f = await fixture(t, { loginAttempts: 3, loginWindowMs: 60_000, loginBlockMs: 60_000 });
+  assert.equal((await f.login()).status, 200);
+  const oldCookie = f.cookie;
+  await f.stop();
+  await f.start();
+  for (let index = 0; index < 3; index++) await expectError(await f.login('incorrect password'), 401);
+  await expectError(await f.login(), 429);
+  // The console writes the same database while the HTTP server remains running.
+  await resetOwnerPassword(f.dataDir, NEW_PASSWORD);
+  await expectError(await f.request('/api/session', { headers: { Cookie: oldCookie } }), 401);
+  assert.equal((await f.login(NEW_PASSWORD)).status, 200, 'recovery must work without restarting the server');
+  await expectError(await f.login(PASSWORD), 401);
+  assert.equal((await f.login(NEW_PASSWORD)).status, 200);
+});
+
+test('the short attempt burst guard also limits successful logins and survives a console reset', async t => {
+  const f = await fixture(t, {
+    loginAttempts: 10, loginBurstAttempts: 2, loginBurstWindowMs: 60_000,
+  });
+  assert.equal((await f.login()).status, 200);
+  assert.equal((await f.login()).status, 200);
+  const blocked = await f.login();
+  await expectError(blocked, 429);
+  assert.ok(Number(blocked.headers.get('retry-after')) > 0);
+  await resetOwnerPassword(f.dataDir, NEW_PASSWORD);
+  await expectError(await f.login(NEW_PASSWORD), 429);
+});
+
+test('simultaneous delayed guesses cannot exceed the remaining failed-credential allowance', async t => {
+  const f = await fixture(t, { loginAttempts: 1, loginWindowMs: 60_000, loginBlockMs: 60_000 });
+  const statuses = await delayedLogins(f, Array(4).fill('incorrect password'));
+  assert.equal(statuses.filter(status => status === 401).length, 1);
+  assert.equal(statuses.filter(status => status === 429).length, 3);
+  await expectError(await f.login(), 429);
+});
+
+test('concurrent successful sign-ins release their reserved failure capacity without a long lockout', async t => {
+  const f = await fixture(t, { loginAttempts: 1, loginWindowMs: 60_000, loginBlockMs: 60_000 });
+  const statuses = await delayedLogins(f, Array(4).fill(PASSWORD));
+  assert.equal(statuses.filter(status => status === 200).length, 1);
+  assert.equal(statuses.filter(status => status === 429).length, 3);
+  assert.equal((await f.login()).status, 200, 'a busy response while a valid login runs must not create a failure lockout');
+  await expectError(await f.login('incorrect password'), 401);
+});
+
 test('delayed login bodies cannot bypass the limit on concurrent password hashing', async t => {
   const f = await fixture(t, { loginAttempts: 30 });
-  const body = JSON.stringify({ username: USERNAME, password: PASSWORD });
-  const requests = [];
-  const connected = [];
-  const completed = [];
-  for (let index = 0; index < 5; index++) {
-    let signalConnected;
-    connected.push(new Promise(resolve => { signalConnected = resolve; }));
-    completed.push(new Promise((resolve, reject) => {
-      const request = http.request(f.url + '/api/login', {
-        method: 'POST', headers: {
-          Origin: ORIGIN, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body),
-        },
-      }, response => { response.resume(); response.on('end', () => resolve(response.statusCode)); });
-      request.on('error', reject);
-      request.on('socket', socket => socket.once('connect', signalConnected));
-      request.flushHeaders();
-      requests.push(request);
-    }));
-  }
-  await Promise.all(connected);
-  // Let every request enter body parsing before releasing all credential bodies.
-  await new Promise(resolve => setTimeout(resolve, 30));
-  for (const request of requests) request.end(body);
-  const statuses = await Promise.all(completed);
+  const statuses = await delayedLogins(f, Array(5).fill(PASSWORD));
   assert.equal(statuses.filter(status => status === 200).length, 2);
   assert.equal(statuses.filter(status => status === 429).length, 3);
 });

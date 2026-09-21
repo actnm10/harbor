@@ -18,6 +18,14 @@
   let adminController = null;
   let adminGeneration = 0;
   let adminUploadUnit = 1073741824;
+  const csrfErrorMessage = 'Invalid security token. Refresh the page and try again.';
+  let authEpoch = 0;
+  let csrfRefresh = null;
+  let loginBusy = false;
+  let authCooldownUntil = 0;
+  let authCooldownTimer = null;
+  let dialogIsPassword = false;
+  let dialogSubmitLabel = 'Save';
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -70,8 +78,75 @@
     window.setTimeout(() => node.remove(), isError ? 8500 : 4500);
   }
 
-  async function api(path, options = {}) {
+  function retryDeadline(response) {
+    const value = response.headers.get('Retry-After');
+    if (!value) return 0;
+    const now = Date.now();
+    const deadline = /^\d+$/.test(value.trim()) ? now + Number(value) * 1000 : Date.parse(value);
+    return Number.isSafeInteger(deadline) && deadline > now ? deadline : 0;
+  }
+
+  function authErrorMessage(error) {
+    return error.message + (error.status === 429 && error.retryAt > Date.now() ? ' You can try again at ' + new Date(error.retryAt).toLocaleTimeString() + '.' : '');
+  }
+
+  function updateAuthControls() {
+    window.clearTimeout(authCooldownTimer);
+    authCooldownTimer = null;
+    const remaining = Math.max(0, Math.ceil((authCooldownUntil - Date.now()) / 1000));
+    if (!remaining) authCooldownUntil = 0;
+    const waiting = 'Try again in ' + Math.floor(remaining / 60) + ':' + String(remaining % 60).padStart(2, '0');
+    const loginVisible = !$('login-view').hidden;
+    $('sign-in').disabled = loginBusy || (loginVisible && remaining > 0);
+    if (loginBusy) $('sign-in').textContent = 'Signing in…';
+    else if (loginVisible && remaining) $('sign-in').textContent = waiting;
+    else $('sign-in').replaceChildren(document.createTextNode('Sign in '), icon('chevron'));
+    const passwordVisible = dialogIsPassword && $('form-dialog').open;
+    if (passwordVisible) {
+      $('dialog-submit').disabled = state.dialogBusy || remaining > 0;
+      $('dialog-submit').textContent = state.dialogBusy ? 'Working…' : remaining ? waiting : dialogSubmitLabel;
+    }
+    if (remaining && (loginVisible || passwordVisible)) authCooldownTimer = window.setTimeout(updateAuthControls, Math.min(1000, authCooldownUntil - Date.now()));
+  }
+
+  function honorAuthCooldown(error) {
+    if (error.status === 429 && error.retryAt > Date.now()) authCooldownUntil = Math.max(authCooldownUntil, error.retryAt);
+    updateAuthControls();
+  }
+
+  function applySession(session) {
+    state.user = session.user;
+    state.csrf = session.csrfToken;
+    state.limits = session.limits || {};
+    $('username').value = session.user.username;
+    $('account-name').textContent = session.user.username;
+    $('admin-settings').hidden = session.user.role !== 'admin';
+    $('account-role').textContent = session.user.role === 'admin' ? 'Administrator' : 'Personal account';
+    $('avatar').textContent = (session.user.username || 'H').slice(0, 1).toUpperCase();
+    $('upload-limit').textContent = 'Up to ' + bytes(state.limits.maxUploadBytes) + ' per file';
+  }
+
+  async function recoverCsrf(expectedToken, epoch) {
+    if (!state.user || epoch !== authEpoch) return false;
+    if (state.csrf !== expectedToken) return !!state.csrf;
+    if (!csrfRefresh || csrfRefresh.epoch !== epoch) {
+      const refresh = { epoch, promise: null };
+      refresh.promise = api('/api/session').then(session => {
+        if (state.user && epoch === authEpoch && state.csrf === expectedToken) applySession(session);
+      }).catch(error => {
+        if (error.status === 401 && epoch === authEpoch) expireSession();
+        throw error;
+      }).finally(() => { if (csrfRefresh === refresh) csrfRefresh = null; });
+      csrfRefresh = refresh;
+    }
+    await csrfRefresh.promise;
+    return !!state.user && epoch === authEpoch && !!state.csrf && state.csrf !== expectedToken;
+  }
+
+  async function api(path, options = {}, canRecoverCsrf = true) {
     const method = options.method || 'GET';
+    const requestEpoch = authEpoch;
+    const requestCsrf = state.csrf;
     const headers = { ...options.headers };
     if (method !== 'GET' && method !== 'HEAD') headers['Content-Type'] = 'application/json';
     if (method !== 'GET' && method !== 'HEAD' && path !== '/api/login') headers['X-CSRF-Token'] = state.csrf;
@@ -87,13 +162,17 @@
       try { data = await response.json(); } catch { /* A proxy may send a non-JSON error. */ }
     }
     if (!response.ok) {
-      if (response.status === 401 && path !== '/api/login' && path !== '/api/session') {
+      if (canRecoverCsrf && method !== 'GET' && method !== 'HEAD' && path !== '/api/login' && response.status === 403 && data?.error === csrfErrorMessage && await recoverCsrf(requestCsrf, requestEpoch)) {
+        return api(path, options, false);
+      }
+      if (response.status === 401 && requestEpoch === authEpoch && path !== '/api/login' && path !== '/api/session') {
         if (path === '/api/password') {
-          try { await api('/api/session'); } catch (sessionError) { if (sessionError.status === 401) expireSession(); }
+          try { await api('/api/session'); } catch (sessionError) { if (sessionError.status === 401 && requestEpoch === authEpoch) expireSession(); }
         } else expireSession();
       }
       const error = new Error(data?.error || 'The request could not be completed. Please try again.');
       error.status = response.status;
+      error.retryAt = retryDeadline(response);
       throw error;
     }
     return data;
@@ -105,6 +184,9 @@
   }
 
   function showLogin(message = '') {
+    authEpoch++;
+    csrfRefresh = null;
+    dialogIsPassword = false;
     cleanPreview();
     adminController?.abort();
     adminGeneration++;
@@ -181,6 +263,7 @@
     $('preview-error').textContent = '';
     closeSidebar();
     setLoginMessage(message);
+    updateAuthControls();
     document.title = 'Sign in · Harbor';
     window.setTimeout(() => ($('username').value ? $('password') : $('username')).focus(), 0);
   }
@@ -199,19 +282,13 @@
   }
 
   async function showApp(session) {
-    state.user = session.user;
-    state.csrf = session.csrfToken;
-    state.limits = session.limits || {};
-    $('username').value = session.user.username;
+    authEpoch++;
+    applySession(session);
     $('password').value = '';
-    $('account-name').textContent = session.user.username;
-    $('admin-settings').hidden = session.user.role !== 'admin';
-    $('account-role').textContent = session.user.role === 'admin' ? 'Administrator' : 'Personal account';
-    $('avatar').textContent = (session.user.username || 'H').slice(0, 1).toUpperCase();
-    $('upload-limit').textContent = 'Up to ' + bytes(state.limits.maxUploadBytes) + ' per file';
     $('boot').hidden = true;
     $('login-view').hidden = true;
     $('app-view').hidden = false;
+    updateAuthControls();
     await readRoute();
   }
 
@@ -458,7 +535,9 @@
     if (wasOpen && mobile && !$('app-view').hidden) $('mobile-menu').focus();
   }
 
-  function openDialog({ title, description, iconName = 'folder', danger = false, submit = 'Save', fields = [], onSubmit }) {
+  function openDialog({ title, description, iconName = 'folder', danger = false, submit = 'Save', fields = [], onSubmit, passwordForm = false }) {
+    dialogIsPassword = passwordForm;
+    dialogSubmitLabel = submit;
     $('dialog-title').textContent = title;
     $('dialog-description').textContent = description;
     $('dialog-icon').replaceChildren(icon(iconName));
@@ -491,6 +570,7 @@
     }
     dialogSubmit = onSubmit;
     $('form-dialog').showModal();
+    updateAuthControls();
     const input = $('dialog-fields').querySelector('input');
     if (input) { input.focus(); input.select(); } else $('dialog-cancel').focus();
   }
@@ -500,6 +580,7 @@
     for (const id of ['dialog-submit', 'dialog-cancel', 'dialog-close']) $(id).disabled = busy;
     $('dialog-form').setAttribute('aria-busy', String(busy));
     $('dialog-fields').querySelectorAll('input').forEach(input => { input.disabled = busy; });
+    updateAuthControls();
   }
 
   function newFolder() {
@@ -533,7 +614,7 @@
 
   function changePassword() {
     $('account-menu').open = false;
-    openDialog({ title: 'Change your password.', description: 'You’ll be signed out on every device after saving your new password.', iconName: 'lock', submit: 'Update password', fields: [
+    openDialog({ title: 'Change your password.', description: 'You’ll be signed out on every device after saving your new password.', iconName: 'lock', submit: 'Update password', passwordForm: true, fields: [
       { name: 'currentPassword', label: 'Current password', type: 'password', autocomplete: 'current-password' },
       { name: 'newPassword', label: 'New password', type: 'password', autocomplete: 'new-password', minLength: 15, maxLength: 128, hint: 'Use 15–128 characters. A longer, unique passphrase works well.' },
       { name: 'confirmPassword', label: 'Confirm new password', type: 'password', autocomplete: 'new-password', minLength: 15, maxLength: 128 }
@@ -894,8 +975,10 @@
     }
   }
 
-  function sendUpload(upload) {
+  function sendUpload(upload, canRecoverCsrf = true) {
     return new Promise((resolve, reject) => {
+      const requestEpoch = authEpoch;
+      const requestCsrf = state.csrf;
       const xhr = new XMLHttpRequest();
       upload.xhr = xhr;
       const params = new URLSearchParams({ parent: upload.parent, name: upload.file.name });
@@ -908,11 +991,20 @@
         upload.progress = event.lengthComputable ? event.loaded / event.total * 100 : 0;
         if (Date.now() - lastRender > 160 || upload.progress >= 100) { renderUploads(); lastRender = Date.now(); }
       });
-      xhr.addEventListener('load', () => {
+      xhr.addEventListener('load', async () => {
         if (xhr.status >= 200 && xhr.status < 300) { upload.progress = 100; resolve(); return; }
         let message = 'Upload failed. Please retry.';
         try { message = JSON.parse(xhr.responseText).error || message; } catch { if (xhr.status === 413) message = 'This file exceeds the server or proxy upload limit.'; }
-        if (xhr.status === 401) expireSession();
+        if (canRecoverCsrf && xhr.status === 403 && message === csrfErrorMessage) {
+          try {
+            if (await recoverCsrf(requestCsrf, requestEpoch) && upload.status === 'uploading') {
+              upload.progress = 0;
+              resolve(await sendUpload(upload, false));
+              return;
+            }
+          } catch (error) { reject(error); return; }
+        }
+        if (xhr.status === 401 && requestEpoch === authEpoch) expireSession();
         reject(new Error(message));
       });
       xhr.addEventListener('error', () => reject(new Error('Connection lost. Retry when your server is reachable.')));
@@ -924,19 +1016,20 @@
 
   $('login-form').addEventListener('submit', async event => {
     event.preventDefault();
-    const button = $('sign-in');
-    button.disabled = true;
-    button.textContent = 'Signing in…';
+    if (loginBusy || authCooldownUntil > Date.now()) return;
+    loginBusy = true;
+    updateAuthControls();
     setLoginMessage('');
     try {
       const session = await api('/api/login', { method: 'POST', body: { username: $('username').value.trim(), password: $('password').value } });
       await showApp(session);
     } catch (error) {
-      setLoginMessage(error.message);
+      honorAuthCooldown(error);
+      setLoginMessage(authErrorMessage(error));
       $('password').focus();
     } finally {
-      button.disabled = false;
-      button.replaceChildren(document.createTextNode('Sign in '), icon('chevron'));
+      loginBusy = false;
+      updateAuthControls();
     }
   });
   $('show-password').addEventListener('click', () => {
@@ -1016,10 +1109,10 @@
   });
   for (const id of ['dialog-close', 'dialog-cancel']) $(id).addEventListener('click', () => { if (!state.dialogBusy) $('form-dialog').close(); });
   $('form-dialog').addEventListener('cancel', event => { if (state.dialogBusy) event.preventDefault(); });
-  $('form-dialog').addEventListener('close', () => { $('dialog-fields').replaceChildren(); dialogSubmit = null; });
+  $('form-dialog').addEventListener('close', () => { $('dialog-fields').replaceChildren(); dialogSubmit = null; dialogIsPassword = false; updateAuthControls(); });
   $('dialog-form').addEventListener('submit', async event => {
     event.preventDefault();
-    if (state.dialogBusy || !dialogSubmit) return;
+    if (state.dialogBusy || !dialogSubmit || (dialogIsPassword && authCooldownUntil > Date.now())) return;
     const values = Object.fromEntries(new FormData($('dialog-form')));
     const originalLabel = $('dialog-submit').textContent;
     setDialogBusy(true);
@@ -1029,11 +1122,13 @@
       await dialogSubmit(values);
       $('form-dialog').close();
     } catch (error) {
-      $('dialog-error').textContent = error.message;
+      if (dialogIsPassword) honorAuthCooldown(error);
+      $('dialog-error').textContent = dialogIsPassword ? authErrorMessage(error) : error.message;
       $('dialog-error').hidden = false;
     } finally {
       setDialogBusy(false);
       $('dialog-submit').textContent = originalLabel;
+      updateAuthControls();
     }
   });
   $('preview-close').addEventListener('click', () => $('preview-dialog').close());

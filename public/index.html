@@ -55,7 +55,7 @@
       <button class="theme-toggle login-theme" type="button" aria-label="Dark mode" aria-pressed="false"><svg class="icon"><use href="#i-moon"/></svg><span>Dark mode</span></button>
       <div class="login-form-inner"><span class="small-label">MAKE YOURSELF AT HOME</span><h2>Welcome back.</h2><p class="muted">Sign in to your personal space.</p>
         <form id="login-form">
-          <label for="username">Username</label><input id="username" name="username" autocomplete="username" required maxlength="64" autofocus>
+          <label for="username">Username</label><input id="username" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required maxlength="64" autofocus>
           <label for="password">Password</label><div class="password-field"><input id="password" name="password" type="password" autocomplete="current-password" required><button id="show-password" class="password-toggle" type="button" aria-label="Show password" aria-pressed="false">Show</button></div>
           <p id="login-error" class="form-error" role="alert" hidden></p>
           <button id="sign-in" class="button primary login-submit" type="submit">Sign in <svg class="icon"><use href="#i-chevron"/></svg></button>
