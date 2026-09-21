@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add an Android 10+ companion app with a secure server connection screen, existing Harbor sign-in and previews, native multi-file upload/save pickers, download progress/cancellation, fullscreen media, and Android Back handling.
+- Isolate Android server sessions, restrict native downloads to the connected server without redirects, and add Android unit/device tests.
+- Use the PDF.js compatibility bundles so PDF and rendered PowerPoint previews work on Android WebViews missing newer typed-array methods.
+
 - Preview Excel workbooks with worksheet selection and readable saved cell values.
 - Preview PowerPoint slides with layout, images, charts, zoom, and text view through an optional isolated local renderer.
 - Distinguish file types with muted pastel icons in light and dark themes, including documents, spreadsheets, PDFs, and presentations.

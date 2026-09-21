@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Harbor</string>
+    <string name="personal_cloud">Your personal cloud</string>
+    <string name="connected_server">Connected to %1$s</string>
+    <string name="server_options">Server options</string>
+    <string name="loading_server">Opening your Harbor…</string>
+    <string name="setup_title">Connect to your Harbor</string>
+    <string name="setup_support">Your photos, documents, and everyday files. All together, wherever you are.</string>
+    <string name="server_url_label">Server address</string>
+    <string name="server_url_hint">https://files.example.com</string>
+    <string name="server_url_help">Enter the secure https:// address of your Harbor server.</string>
+    <string name="connect">Connect</string>
+    <string name="connecting">Connecting…</string>
+    <string name="setup_footer">You’ll sign in with your Harbor account next.</string>
+    <string name="invalid_server_url">Enter a valid server address beginning with https://.</string>
+    <string name="connection_error_title">Let’s get you reconnected.</string>
+    <string name="connection_error">Your server isn’t responding. Check your connection and try again.</string>
+    <string name="retry">Try again</string>
+    <string name="change_server">Change server</string>
+    <string name="reload">Reload</string>
+    <string name="all_files">All files</string>
+    <string name="cancel">Cancel</string>
+    <string name="download">Download</string>
+    <string name="secure_connection_error">We couldn’t establish a secure connection to this server. Check the address and try again.</string>
+    <string name="choose_files">Choose files</string>
+</resources>

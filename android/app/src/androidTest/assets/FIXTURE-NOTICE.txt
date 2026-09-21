@@ -1,0 +1,9 @@
+No certificate or private key is stored in this source directory.
+QA builds generate fresh disposable credentials for 127.0.0.1 using the local JDK.
+They must never be used by a real server.
+
+The CA is trusted only for 127.0.0.1 by the separate Harbor .qa application.
+The key and certificate are generated under app/build/generated/qa-fixture.
+Only the separate QA application trusts this CA, and only the instrumentation
+test APK includes the generated key and chain as test assets.
+Normal debug/release builds and their unit tests do not generate these credentials.

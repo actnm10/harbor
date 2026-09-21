@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="harbor_background">#F7F8F5</color>
+    <color name="harbor_surface">#FFFFFF</color>
+    <color name="harbor_surface_soft">#EDF3EF</color>
+    <color name="harbor_ink">#243B35</color>
+    <color name="harbor_muted">#687B73</color>
+    <color name="harbor_line">#DFE6E0</color>
+    <color name="harbor_accent">#236B5E</color>
+    <color name="harbor_accent_text">#FFFFFF</color>
+    <color name="harbor_accent_soft">#E7F0EB</color>
+    <color name="harbor_ripple">#24236B5E</color>
+    <color name="harbor_disabled">#DDE5DF</color>
+    <color name="harbor_disabled_text">#87968E</color>
+    <color name="harbor_error">#9D493E</color>
+    <color name="harbor_error_background">#FBEFEB</color>
+    <color name="harbor_error_line">#EEDBD3</color>
+    <color name="harbor_launcher_background">#236B5E</color>
+</resources>

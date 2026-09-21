@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Disposable documents exist only in the separately installed test APK. -->
+        <provider android:name="com.harborfiles.android.FixtureDocumentProvider"
+            android:authorities="com.harborfiles.android.fixture.documents"
+            android:exported="true" android:grantUriPermissions="true" />
+    </application>
+</manifest>

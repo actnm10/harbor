@@ -1,0 +1,88 @@
+plugins {
+    id 'com.android.application'
+}
+
+abstract class GenerateHarborQaFixture extends DefaultTask {
+    @InputFile abstract org.gradle.api.file.RegularFileProperty getGeneratorFile()
+    @OutputDirectory abstract org.gradle.api.file.DirectoryProperty getResourceOutput()
+    @OutputDirectory abstract org.gradle.api.file.DirectoryProperty getAssetOutput()
+    @javax.inject.Inject abstract org.gradle.process.ExecOperations getExecOperations()
+
+    @TaskAction void generate() {
+        def javaExecutable = new File(System.getProperty('java.home'),
+                'bin/' + (System.getProperty('os.name').toLowerCase().contains('windows') ? 'java.exe' : 'java'))
+        execOperations.exec {
+            commandLine javaExecutable.absolutePath, '--source', '17', generatorFile.get().asFile.absolutePath,
+                    resourceOutput.get().asFile.parentFile.absolutePath
+        }
+    }
+}
+
+// Local HTTPS test credentials are generated only inside ignored build output.
+// No private key is checked in or included in normal debug/release applications.
+def qaFixtureDirectory = layout.buildDirectory.dir('generated/qa-fixture')
+def generateQaFixture = tasks.register('generateQaFixture', GenerateHarborQaFixture) {
+    generatorFile.set(layout.projectDirectory.file('../tools/GenerateQaFixture.java'))
+    resourceOutput.set(qaFixtureDirectory.map { it.dir('res') })
+    assetOutput.set(qaFixtureDirectory.map { it.dir('assets') })
+    // Every QA build gets fresh credentials; cached certificates cannot expire later.
+    outputs.upToDateWhen { false }
+}
+
+android {
+    namespace 'com.harborfiles.android'
+    compileSdk 35
+    buildToolsVersion '35.0.0'
+
+    defaultConfig {
+        applicationId 'com.harborfiles.android'
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName '0.1alpha'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    buildFeatures { buildConfig true }
+    sourceSets { androidTest.assets.srcDir '../../public' }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+        // Instrumented tests have their own app id and a loopback-only test CA.
+        // The installable debug/release apps use ordinary system certificate trust.
+        qa {
+            initWith debug
+            applicationIdSuffix '.qa'
+            matchingFallbacks = ['debug']
+        }
+    }
+    testBuildType providers.gradleProperty('harborTestBuildType').getOrElse('qa')
+    lint { abortOnError true }
+}
+
+androidComponents {
+    // QA exists for instrumentation; JVM tests run against normal app variants.
+    beforeVariants(selector().withBuildType('qa')) { builder -> builder.enableUnitTest = false }
+    onVariants(selector().withBuildType('qa')) { variant ->
+        variant.sources.res.addGeneratedSourceDirectory(generateQaFixture) { task -> task.resourceOutput }
+        if (variant.androidTest != null) {
+            variant.androidTest.sources.assets.addGeneratedSourceDirectory(generateQaFixture) { task -> task.assetOutput }
+        }
+        // AGP assigns default generated locations when registering each source;
+        // keep both matching credential outputs together in the bounded fixture root.
+        generateQaFixture.configure {
+            resourceOutput.set(qaFixtureDirectory.map { it.dir('res') })
+            assetOutput.set(qaFixtureDirectory.map { it.dir('assets') })
+        }
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:runner:1.5.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+}

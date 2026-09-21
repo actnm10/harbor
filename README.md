@@ -233,6 +233,12 @@ Harbor 0.1alpha is an early development release and has not received an independ
 
 ## Development
 
+### Android companion
+
+The `android/` directory contains the first Android app, supporting Android 10 and newer. Connect it to the same HTTPS Harbor address you use in a browser and sign in with your existing account. It includes native upload/save pickers and carries through the server's mobile browser, previews, administration, and themes. See [Android setup and build instructions](android/README.md). Camera backup and background synchronization are outside this first version.
+
+### Server development
+
 Install Node.js **24.15 or newer within the 24.x series** and pnpm **11.19.0**. The app uses the built-in `node:sqlite` API, currently labeled release candidate in the [Node 24 documentation](https://nodejs.org/download/release/latest-v24.x/docs/api/sqlite.html). Install the locked dependencies before running it:
 
 ```sh

@@ -16,6 +16,7 @@
 *.p12
 *.pfx
 *.jks
+*.pk8
 !.env.example
 
 # Uploaded data, metadata databases, and backups
@@ -54,6 +55,16 @@
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Android local tools, build output, and signing material
+/android/.gradle/
+/android/.idea/
+/android/local.properties
+/android/build/
+/android/app/build/
+*.apk
+*.aab
+*.keystore
 
 # Keep committed examples and regression fixtures
 !.env.example
