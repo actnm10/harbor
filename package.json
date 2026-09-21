@@ -10,12 +10,14 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test",
+    "test": "node --test test/*.test.js",
     "admin": "node admin.js",
     "vendor": "node scripts/vendor.mjs"
   },
   "dependencies": {
+    "saxes": "6.0.0",
     "word-extractor": "1.0.4",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yauzl": "3.4.0"
   },
   "devDependencies": {

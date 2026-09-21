@@ -4,7 +4,14 @@
   const $ = id => document.getElementById(id);
   const titles = { all: 'All files', image: 'Photos', video: 'Videos', audio: 'Audio', documents: 'Documents' };
   const imageTypes = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif', 'image/bmp']);
-  const documentExtensions = new Set(['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'xml', 'yaml', 'yml', 'log', 'ini', 'conf', 'cfg', 'js', 'ts', 'css', 'py', 'sh', 'c', 'h', 'cpp', 'java', 'sql', 'doc', 'docx', 'pdf']);
+  const documentExtensions = new Set(['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'xml', 'yaml', 'yml', 'log', 'ini', 'conf', 'cfg', 'js', 'ts', 'css', 'py', 'sh', 'c', 'h', 'cpp', 'java', 'sql', 'doc', 'docx', 'pdf', 'xls', 'xlsx', 'ppt', 'pptx']);
+  const spreadsheetExtensions = new Set(['xls', 'xlsx', 'xlsm', 'xlsb', 'xlt', 'xltx', 'xltm', 'csv', 'tsv', 'ods', 'ots']);
+  const presentationExtensions = new Set(['ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'ppsm', 'pot', 'potx', 'potm', 'odp', 'otp']);
+  const textDocumentExtensions = new Set([...documentExtensions, 'rtf', 'docm', 'dot', 'dotx', 'dotm', 'odt', 'ott', 'pages']);
+  const spreadsheetMimes = new Set(['application/vnd.ms-excel', 'application/msexcel', 'application/x-msexcel', 'application/x-ms-excel', 'application/excel', 'application/x-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.openxmlformats-officedocument.spreadsheetml.template', 'application/vnd.ms-excel.sheet.macroenabled.12', 'application/vnd.ms-excel.sheet.binary.macroenabled.12', 'application/vnd.ms-excel.template.macroenabled.12', 'application/vnd.oasis.opendocument.spreadsheet', 'application/vnd.oasis.opendocument.spreadsheet-template', 'text/csv', 'text/tab-separated-values']);
+  const presentationMimes = new Set(['application/vnd.ms-powerpoint', 'application/mspowerpoint', 'application/powerpoint', 'application/x-mspowerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/vnd.openxmlformats-officedocument.presentationml.slideshow', 'application/vnd.openxmlformats-officedocument.presentationml.template', 'application/vnd.ms-powerpoint.presentation.macroenabled.12', 'application/vnd.ms-powerpoint.slideshow.macroenabled.12', 'application/vnd.ms-powerpoint.template.macroenabled.12', 'application/vnd.oasis.opendocument.presentation', 'application/vnd.oasis.opendocument.presentation-template']);
+  const textDocumentMimes = new Set(['application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.wordprocessingml.template', 'application/vnd.ms-word.document.macroenabled.12', 'application/vnd.ms-word.template.macroenabled.12', 'application/rtf', 'application/vnd.oasis.opendocument.text', 'application/vnd.oasis.opendocument.text-template', 'application/json', 'application/xml']);
+  const fileKindLabels = { folder: 'Folder', image: 'Image', video: 'Video', audio: 'Audio', document: 'Document', spreadsheet: 'Spreadsheet', presentation: 'Presentation', pdf: 'PDF document', file: 'File' };
   const state = { user: null, csrf: '', limits: {}, items: [], breadcrumbs: [], route: { parent: 'root', type: 'all', q: '' }, view: 'grid', sort: 'name', loading: false, loadFailed: false, loadController: null, uploads: [], uploading: false, dialogBusy: false };
   let searchTimer;
   let refreshTimer;
@@ -62,13 +69,36 @@
     return '/api/files/' + encodeURIComponent(item.id) + '/content' + (download ? '?download=1' : '');
   }
 
+  function fileExtension(name) {
+    if (typeof name !== 'string' || name.lastIndexOf('.') <= 0) return '';
+    return name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+  }
+
+  function canPreviewDocument(item) {
+    return item.kind !== 'folder' && documentExtensions.has(fileExtension(item.name));
+  }
+
   function classify(item) {
     if (item.kind === 'folder') return 'folder';
-    if (imageTypes.has(item.mime)) return 'image';
-    if ((item.mime || '').startsWith('video/')) return 'video';
-    if ((item.mime || '').startsWith('audio/')) return 'audio';
-    if ((item.mime || '').startsWith('text/') || /pdf|document|sheet|presentation|rtf/.test(item.mime || '')) return 'document';
+    const mime = String(item.mime || item.type || '').split(';', 1)[0].trim().toLowerCase();
+    const extension = fileExtension(item.name);
+    if (imageTypes.has(mime)) return 'image';
+    if (mime.startsWith('video/')) return 'video';
+    if (mime.startsWith('audio/')) return 'audio';
+    if (mime === 'application/pdf' || mime === 'application/x-pdf') return 'pdf';
+    if (spreadsheetMimes.has(mime)) return 'spreadsheet';
+    if (presentationMimes.has(mime)) return 'presentation';
+    if (extension === 'pdf') return 'pdf';
+    if (spreadsheetExtensions.has(extension)) return 'spreadsheet';
+    if (presentationExtensions.has(extension)) return 'presentation';
+    if (mime.startsWith('text/') || textDocumentMimes.has(mime) || textDocumentExtensions.has(extension)) return 'document';
     return 'file';
+  }
+
+  function fileIcon(kind) {
+    const result = icon({ document: 'document', spreadsheet: 'sheet', presentation: 'slides', pdf: 'pdf' }[kind] || kind);
+    result.classList.add('file-type-symbol');
+    return result;
   }
 
   function toast(message, isError = false) {
@@ -256,6 +286,8 @@
     dialogSubmit = null;
     $('preview-title').textContent = '';
     $('preview-meta').textContent = '';
+    $('preview-file-icon').replaceChildren();
+    $('preview-file-icon').className = 'file-type-icon preview-type-icon';
     $('preview-download').removeAttribute('href');
     $('preview-download').removeAttribute('download');
     $('preview-content').querySelectorAll('video,audio').forEach(media => { media.pause(); media.removeAttribute('src'); media.load(); });
@@ -459,7 +491,7 @@
       const card = element('article', 'file-card kind-' + kind);
       const open = element('button', 'file-open');
       open.type = 'button';
-      open.setAttribute('aria-label', (item.kind === 'folder' ? 'Open folder ' : 'Preview ') + item.name);
+      open.setAttribute('aria-label', (item.kind === 'folder' ? 'Open folder ' : 'Preview ' + fileKindLabels[kind].toLowerCase() + ' ') + item.name);
       open.addEventListener('click', () => item.kind === 'folder' ? navigate(item.id) : openPreview(item));
       const visual = element('div', 'file-visual');
       if (kind === 'image') {
@@ -468,12 +500,12 @@
         image.alt = '';
         image.loading = 'lazy';
         image.decoding = 'async';
-        image.addEventListener('error', () => visual.replaceChildren(icon('image')), { once: true });
+        image.addEventListener('error', () => visual.replaceChildren(fileIcon('image')), { once: true });
         visual.append(image);
       } else {
-        visual.append(icon(kind === 'document' ? 'file' : kind));
+        visual.append(fileIcon(kind));
         if (item.kind !== 'folder') {
-          const extension = item.name.includes('.') ? item.name.split('.').at(-1).slice(0, 9).toUpperCase() : 'FILE';
+          const extension = fileExtension(item.name).slice(0, 9).toUpperCase() || 'FILE';
           visual.append(element('span', 'file-extension', extension));
         }
       }
@@ -639,14 +671,16 @@
   function openPreview(item) {
     cleanPreview();
     const generation = previewGeneration;
+    const kind = classify(item);
     $('preview-title').textContent = item.name;
-    $('preview-meta').textContent = bytes(item.size) + ' · ' + date(item.updatedAt);
+    $('preview-meta').textContent = fileKindLabels[kind] + ' · ' + bytes(item.size) + ' · ' + date(item.updatedAt);
+    $('preview-file-icon').className = 'file-type-icon preview-type-icon kind-' + kind;
+    $('preview-file-icon').replaceChildren(fileIcon(kind));
     $('preview-download').href = contentUrl(item, true);
     $('preview-download').download = item.name;
     $('preview-error').hidden = true;
     const holder = $('preview-content');
     holder.replaceChildren();
-    const kind = classify(item);
     const mediaError = () => {
       $('preview-error').textContent = kind === 'image' ? 'This image couldn’t be displayed. Download it to open it on your device.' : 'Your browser may not support this media format or codec, or the file could not be loaded. Download it to play it on your device.';
       $('preview-error').hidden = false;
@@ -672,7 +706,7 @@
         wrap.append(art, media);
         holder.append(wrap);
       } else holder.append(media);
-    } else if (documentExtensions.has(item.name.split('.').at(-1).toLowerCase())) {
+    } else if (canPreviewDocument(item)) {
       holder.classList.add('document-preview-host');
       const loading = element('div', 'document-loading');
       loading.append(element('span', 'spinner'), element('span', '', 'Opening your document…'));
@@ -687,7 +721,9 @@
       });
     } else {
       const fallback = element('div', 'unsupported-preview');
-      fallback.append(icon('file'), element('h3', '', 'This one is ready to download.'), element('p', '', 'A browser preview isn’t available for this file type. Use Download to open it in your favorite app.'));
+      const fallbackIcon = element('span', 'file-type-icon preview-fallback-icon kind-' + kind);
+      fallbackIcon.append(fileIcon(kind));
+      fallback.append(fallbackIcon, element('h3', '', 'This one is ready to download.'), element('p', '', 'A browser preview isn’t available for this file type. Use Download to open it in your favorite app.'));
       holder.append(fallback);
     }
     $('preview-dialog').showModal();
@@ -897,11 +933,12 @@
     const holder = $('upload-list');
     holder.replaceChildren();
     for (const upload of state.uploads) {
-      const row = element('div', 'upload-row');
+      const kind = classify(upload.file);
+      const row = element('div', 'upload-row kind-' + kind);
       const top = element('div', 'upload-row-top');
-      top.append(icon('file'));
+      top.append(fileIcon(kind));
       const name = element('span', 'upload-row-name', upload.file.name);
-      name.title = upload.file.name;
+      name.title = fileKindLabels[kind] + ' · ' + upload.file.name;
       top.append(name);
       if (upload.status === 'queued' || upload.status === 'uploading') {
         const cancel = menuAction('', 'close', () => {

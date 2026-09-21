@@ -11,6 +11,7 @@ import { HttpError, loadConfig, openDatabase, hashPassword, verifyPassword, vali
   validateName, mimeForName, canPreview, publicItem, tokenHash, parseRange } from './lib.js';
 import { createStorageManager } from './storage.js';
 import { createSettingsManager } from './settings.js';
+import { createPresentationPreview } from './presentation-preview.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -65,7 +66,7 @@ export async function createApplication(overrides = {}) {
   const loginBurstBuckets = new Map();
   let credentialHash = db.prepare('SELECT password_hash FROM owner WHERE id = 1').get()?.password_hash;
   let credentialGeneration = 0;
-  let authInFlight = 0, previewsInFlight = 0, reservedBytes = 0, closing = false;
+  let authInFlight = 0, previewsInFlight = 0, presentationsInFlight = 0, reservedBytes = 0, closing = false;
   let storage, settings;
   try {
     storage = createStorageManager(db, config);
@@ -482,6 +483,28 @@ export async function createApplication(overrides = {}) {
         insertNode(row); respond(res, 201, publicItem(row)); return;
       }
       if (url.pathname === '/api/upload' && method === 'PUT') { await upload(req, res, url); return; }
+      const slidesMatch = /^\/api\/files\/([^/]+)\/preview\.pdf$/.exec(url.pathname);
+      if (slidesMatch && method === 'GET') {
+        const row = getNode(slidesMatch[1]);
+        if (row.kind !== 'file') throw new HttpError(400, 'Folders cannot be previewed as presentations.');
+        if (presentationsInFlight >= 1) { res.setHeader('Retry-After', '5'); throw new HttpError(429, 'Another slide preview is being prepared. Try again in a moment.'); }
+        const controller = new AbortController();
+        const abort = () => { if (!res.writableEnded) controller.abort(); };
+        res.once('close', abort);
+        req.setTimeout(110000);
+        presentationsInFlight++;
+        try {
+          const pdf = await createPresentationPreview({ filePath: storage.blobPath(row), name: row.name, size: row.size,
+            socketPath: overrides.presentationRendererSocket ?? process.env.PRESENTATION_RENDERER_SOCKET, signal: controller.signal });
+          // Conversion may outlive a password reset or session expiry.
+          session(req);
+          if (res.destroyed) return;
+          res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': pdf.length, 'Accept-Ranges': 'none',
+            'Content-Disposition': 'inline; filename="preview.pdf"', 'Content-Security-Policy': "default-src 'none'; sandbox" });
+          res.end(pdf);
+        } finally { presentationsInFlight--; res.off('close', abort); }
+        return;
+      }
       const previewMatch = /^\/api\/files\/([^/]+)\/preview$/.exec(url.pathname);
       if (previewMatch && method === 'GET') {
         const row = getNode(previewMatch[1]);

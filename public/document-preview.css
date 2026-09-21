@@ -14,4 +14,21 @@
 .document-canvas{display:block;margin:0 auto;background:#fff;box-shadow:0 2px 15px #0002;max-width:none}
 .document-paper>.document-text{text-align:left;min-height:100%;box-shadow:0 2px 15px #0001}
 [data-theme=dark] .document-paper{background:#121a27}
+.document-sheet-select{min-width:120px;max-width:min(300px,65vw);height:34px;border:1px solid var(--line);border-radius:7px;padding:5px 30px 5px 10px;background:var(--surface);color:var(--ink);font:inherit}
+.spreadsheet-viewport{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;background:var(--surface)}
+.spreadsheet-viewport:focus-visible{outline:2px solid var(--green);outline-offset:-3px}
+.spreadsheet-table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
+.spreadsheet-table th,.spreadsheet-table td{padding:8px 12px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);min-width:108px;max-width:360px;white-space:pre-wrap;overflow-wrap:anywhere;text-align:left;vertical-align:top;font-weight:400}
+.spreadsheet-table thead th{position:sticky;top:0;z-index:2;text-align:center;font-weight:600;background:#e8eee9;color:#45664f}
+.spreadsheet-table tbody th,.spreadsheet-table .spreadsheet-corner{position:sticky;left:0;min-width:44px;max-width:65px;text-align:right;font-weight:500;background:#eff3ef;color:#617368;z-index:1}
+.spreadsheet-table .spreadsheet-corner{z-index:3;background:#e8eee9}
+.spreadsheet-table tbody tr:nth-child(even) td{background:#f5f8f540}
+.spreadsheet-table tbody tr:hover td{background:#78998b12}
+.spreadsheet-table td.spreadsheet-number{text-align:right}
+.spreadsheet-footer{border-top:1px solid var(--line);border-bottom:0;font-variant-numeric:tabular-nums}
+.document-preview-empty{padding:28px;color:var(--muted);font-size:13px}
+[data-theme=dark] .spreadsheet-table thead th,[data-theme=dark] .spreadsheet-table .spreadsheet-corner{background:#263c38;color:#bdd3c7}
+[data-theme=dark] .spreadsheet-table tbody th{background:#25332f;color:#a6c0b4}
+[data-theme=dark] .spreadsheet-table tbody tr:nth-child(even) td{background:#ffffff03}
+[data-theme=dark] .spreadsheet-table tbody tr:hover td{background:#a7c5b410}
 @media(max-width:700px){.document-toolbar{padding:10px;gap:6px}.document-text{padding:16px;font-size:12px}.document-paper{padding:10px}.document-page-number{width:48px!important}.document-zoom{max-width:104px}.document-note,.document-status{padding:8px 12px}.preview-content.document-preview-host{height:68vh}.pdf-toolbar .document-button{padding:6px 8px!important}}

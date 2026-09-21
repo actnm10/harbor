@@ -2,6 +2,16 @@
 
 Verified on September 20, 2026 using Node.js 24.19.0 on Windows and Node.js 24.21.0 inside Docker on Ubuntu-26.04 / WSL 2.
 
+## Office previews and file colors
+
+The full Office-preview suite passed 87/87 tests on Linux with no skips (15.76 seconds), and 82 tests on Windows with five Linux-only skips (26.90 seconds). The Linux image ran as UID/GID 1000 with a read-only root, no network, all capabilities dropped, a 1 GiB memory limit, a 100-process limit, and a 256 MiB temporary filesystem. Test helpers are excluded from the test-file glob. A subsequent HTML-only fix preserves the Download link's accessible name on phones; all seven focused file-category/accessibility tests passed after that adjustment.
+
+Excel cases cover legacy XLS and modern XLSX, ordered worksheet selection, sparse coordinates, formatted values, cached formulas, Unicode, literal markup, empty worksheets, and output truncation. Malformed compound files, excessive shared-string counts, unsafe ZIP paths, excessive XML depth/size, DTDs, and expansion limits are checked before parsing in a bounded worker. Existing Word and authentication regressions continue to pass.
+
+Presentation cases exercise authenticated access, session invalidation during conversion, private socket requests containing document bytes only, invalid/oversized responses, cancellation, conversion timeouts, process cleanup, and reuse after failure. The automated lifecycle cases use a controlled fake converter. Separate real LibreOffice 7.4.7 (Debian package 4:7.4.7-1+deb12u14) trials converted synthetic two-slide PPTX and legacy PPT presentations in the isolated renderer container. Both PDFs contained two pages and preserved the sample shapes, embedded image, chart labels, and values; temporary files were removed after each conversion.
+
+A separate Compose test project verified socket permissions, healthy startup, and authenticated Excel/PowerPoint previews through the app. Browser checks covered worksheet switching, percentages/cached values, literal markup, empty sheets, the PowerPoint image and chart slides, slide navigation, selectable text, and full-slide fitting. Light and slate-dark file colors were visually checked. At a 390-by-844 viewport, worksheets scrolled horizontally inside the dialog without page overflow and slide controls remained usable. These are browser viewport checks, not a physical Android-device test. Production Caddy/Compose files and live deployment volumes were unchanged.
+
 ## Setup and login bug fixes
 
 The final rebuilt Linux image passed all 58 automated tests with no skips in 15.16 seconds using Node.js 24.21.0, UID/GID 1000, a read-only root filesystem and test mount, no network, all capabilities dropped, a 1 GiB memory limit, a 100-process limit, and a 256 MiB temporary filesystem. The full Windows run passed all 54 platform-independent tests in 24.00 seconds; the affected preflight suite was rerun after the final permission-diagnostic adjustment and passed with its four Linux-only cases skipped. The production Docker image built successfully, including the new preflight module.

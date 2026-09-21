@@ -50,7 +50,9 @@ function checkOle(bytes) {
     const block = sector(fatIds[blockIndex]);
     for (let slot = 0; slot < entriesPerSector; slot++) {
       const index = blockIndex * entriesPerSector + slot, value = block.readInt32LE(slot * 4);
-      if (index >= sectorCount) { if (value !== FREE) invalid(); continue; }
+      // Some writers pad unused table slots with zero or END. These cannot be reached: every
+      // live pointer is checked against the physical sector count below.
+      if (index >= sectorCount) { if (![FREE, END, 0].includes(value)) invalid(); continue; }
       if (!isSector(value) && ![FREE, END, FAT, DIF].includes(value)) invalid();
       fat[index] = value;
     }
@@ -128,7 +130,7 @@ function checkOle(bytes) {
     const block = sector(miniFatIds[blockIndex]);
     for (let slot = 0; slot < entriesPerSector; slot++) {
       const index = blockIndex * entriesPerSector + slot, value = block.readInt32LE(slot * 4);
-      if (index >= miniCount) { if (value !== FREE) invalid(); continue; }
+      if (index >= miniCount) { if (![FREE, END, 0].includes(value)) invalid(); continue; }
       if ((value < 0 && value !== FREE && value !== END) || value >= miniCount) invalid();
       miniFat[index] = value;
     }
@@ -173,12 +175,19 @@ function checkZip(bytes) {
 
 try {
   const bytes = Buffer.from(workerData.bytes);
-  if (workerData.extension === '.docx') await checkZip(bytes);
-  else checkOle(bytes);
-  const document = await new WordExtractor().extract(bytes);
-  const sections = [document.getHeaders({ includeFooters: false }), document.getBody(), document.getFootnotes(), document.getEndnotes(), document.getFooters(), document.getTextboxes({ includeHeadersAndFooters: false })].filter(Boolean);
-  const text = sections.join('\n\n');
-  parentPort.postMessage({ text: text.slice(0, MAX_TEXT_CHARS), truncated: text.length > MAX_TEXT_CHARS });
+  if (workerData.extension === '.xls' || workerData.extension === '.xlsx') {
+    if (workerData.extension === '.xls') checkOle(bytes);
+    const { createSpreadsheetPreview } = await import('./preview-spreadsheet.js');
+    parentPort.postMessage(await createSpreadsheetPreview(bytes, workerData.extension));
+  } else {
+    if (workerData.extension === '.docx') await checkZip(bytes);
+    else checkOle(bytes);
+    const document = await new WordExtractor().extract(bytes);
+    const sections = [document.getHeaders({ includeFooters: false }), document.getBody(), document.getFootnotes(), document.getEndnotes(), document.getFooters(), document.getTextboxes({ includeHeadersAndFooters: false })].filter(Boolean);
+    const text = sections.join('\n\n');
+    parentPort.postMessage({ text: text.slice(0, MAX_TEXT_CHARS), truncated: text.length > MAX_TEXT_CHARS });
+  }
 } catch {
-  parentPort.postMessage({ error: 'This Word document could not be previewed. It may be encrypted, damaged, or exceed preview limits. Download it to open it locally.' });
+  const label = workerData.extension === '.xls' || workerData.extension === '.xlsx' ? 'Excel' : 'Word';
+  parentPort.postMessage({ error: `This ${label} document could not be previewed. It may be encrypted, damaged, or exceed preview limits. Download it to open it locally.` });
 }

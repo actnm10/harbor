@@ -1,0 +1,40 @@
+# Optional local PowerPoint renderer; combine with either production or local Compose.
+# The renderer has no network interface and cannot read the app's data or storage.
+services:
+  app:
+    environment:
+      PRESENTATION_RENDERER_SOCKET: /run/harbor-preview/renderer.sock
+    volumes:
+      - preview_socket:/run/harbor-preview:ro
+    depends_on:
+      renderer:
+        condition: service_healthy
+
+  renderer:
+    build:
+      context: .
+      dockerfile: deploy/renderer.Dockerfile
+    image: ${HARBOR_RENDERER_IMAGE:-harbor-renderer:local}
+    restart: unless-stopped
+    init: true
+    network_mode: none
+    read_only: true
+    volumes:
+      - preview_socket:/run/harbor-preview
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 1g
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  preview_socket:

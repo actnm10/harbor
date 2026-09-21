@@ -43,3 +43,28 @@ dialog{border:1px solid #dce5d6;border-radius:16px;box-shadow:0 20px 100px #1834
 [data-theme=dark] .preview-content>video{background:#101722}
 @media(max-width:700px){.topbar-right{gap:12px}.theme-toggle{width:33px;height:33px;padding:7px}.topbar .theme-toggle>span{display:none}.login-theme{position:static;align-self:flex-end;margin:0 0 19px;width:auto;padding:7px 10px}.admin-dialog{max-width:calc(100vw - 20px);max-height:calc(100dvh - 20px);border-radius:13px}.admin-header{padding:23px 21px 20px}.admin-header h2{font-size:24px}.admin-header .eyebrow{font-size:8px;letter-spacing:1.6px}.admin-body{padding:22px 21px}.admin-field-grid{grid-template-columns:1fr;gap:17px}.admin-section{margin-bottom:23px}.admin-dialog label{font-size:11px}.admin-dialog input,.admin-dialog select{font-size:13px}.add-storage-row{flex-direction:column;align-items:stretch}.add-storage-row .button{align-self:flex-start;min-height:38px}.admin-save-row{gap:14px}.admin-save-row>span{font-size:9px}.admin-section h3{font-size:13px}}
 @media(max-width:390px){.topbar-right .private-badge{display:none}.admin-header h2{font-size:22px}}
+
+/* Muted file colors stay consistent in cards, lists, uploads, and previews. */
+.kind-document{--file-tint:#edf3fa;--file-ink:#6887ad;--file-border:#dce6f2}
+.kind-spreadsheet{--file-tint:#eef5ef;--file-ink:#739580;--file-border:#dce9df}
+.kind-pdf{--file-tint:#faeeee;--file-ink:#b77b80;--file-border:#f0dddd}
+.kind-presentation{--file-tint:#fbf2e8;--file-ink:#b88b62;--file-border:#efdfcc}
+[data-theme=dark] .kind-document{--file-tint:#28364b;--file-ink:#a1b9d8;--file-border:#394b64}
+[data-theme=dark] .kind-spreadsheet{--file-tint:#2b3935;--file-ink:#a1c1ae;--file-border:#3a5046}
+[data-theme=dark] .kind-pdf{--file-tint:#3d3039;--file-ink:#d3a5aa;--file-border:#56414b}
+[data-theme=dark] .kind-presentation{--file-tint:#3d3530;--file-ink:#d8b694;--file-border:#55483d}
+.file-card:is(.kind-document,.kind-spreadsheet,.kind-pdf,.kind-presentation) .file-visual{background:var(--file-tint)}
+.file-card:is(.kind-document,.kind-spreadsheet,.kind-pdf,.kind-presentation) .file-visual>.file-type-symbol{color:var(--file-ink)}
+.file-card:is(.kind-document,.kind-spreadsheet,.kind-pdf,.kind-presentation) .file-extension{color:var(--file-ink)}
+.upload-row:is(.kind-document,.kind-spreadsheet,.kind-pdf,.kind-presentation) .upload-row-top>.file-type-symbol{color:var(--file-ink)}
+.file-type-icon{display:grid;place-items:center;background:var(--file-tint,#edf1f2);color:var(--file-ink,#8a9da4);border:1px solid var(--file-border,#e0e6e8);flex-shrink:0}
+[data-theme=dark] .file-type-icon{background:var(--file-tint,#283243);color:var(--file-ink,#a0afc5);border-color:var(--file-border,#3a485d)}
+.file-type-icon>.file-type-symbol{color:inherit;stroke-width:1.4}
+.preview-title-wrap{display:grid;grid-template-columns:36px minmax(0,1fr);column-gap:11px;align-items:center}
+.preview-type-icon{grid-column:1;grid-row:1 / span 2;width:36px;height:40px;border-radius:8px}
+.preview-type-icon>.file-type-symbol{width:24px;height:24px}
+.preview-title-wrap h2,.preview-title-wrap p{grid-column:2}
+.preview-title-wrap p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.preview-fallback-icon{width:84px;height:96px;margin:0 auto 23px;border-radius:15px}
+.preview-fallback-icon>.file-type-symbol{width:54px;height:54px;stroke-width:1.2}
+@media(max-width:700px){.preview-title-wrap{grid-template-columns:29px minmax(0,1fr);column-gap:8px}.preview-type-icon{width:29px;height:34px;border-radius:7px}.preview-type-icon>.file-type-symbol{width:21px;height:21px}.preview-title-wrap p{font-size:9px}}

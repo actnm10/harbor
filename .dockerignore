@@ -8,6 +8,12 @@
 !preflight.js
 !preview.js
 !preview-worker.js
+!preview-spreadsheet.js
+!presentation-preview.js
+!renderer.js
+!renderer-convert.py
+!deploy/
+!deploy/renderer.Dockerfile
 !pnpm-lock.yaml
 !pnpm-workspace.yaml
 !public/

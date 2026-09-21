@@ -12,6 +12,8 @@ Harbor runs as one Node.js 24 process with SQLite metadata and files on disk. Do
 - Rename and download; permanent deletion requires confirmation in the interface.
 - Images and audio/video previews with seeking. Playback depends on browser codec support.
 - Text and Word document previews, plus a PDF viewer with page navigation, zoom, and text view.
+- Excel worksheet previews and PowerPoint slide previews with the optional local renderer.
+- Muted file-type colors in both themes: blue documents, green spreadsheets, red PDFs, and orange presentations.
 - A light/dark theme toggle on the login page and in the library, remembered in your browser.
 - An owner password change screen and an offline password recovery command.
 - An Administration menu for upload limits, storage quota, session duration, and storage locations.
@@ -119,6 +121,38 @@ Click a file to preview it. Text previews support common plain-text, Markdown, C
 
 PDF previews support files up to 100 MiB, page navigation, zoom, and a selectable text view. Scanned pages may have no selectable text. PDF scripts, interactive forms, and annotation actions are disabled. Files remain downloadable at their original quality regardless of preview support.
 
+Excel `.xls` and `.xlsx` files open as a worksheet table with a sheet selector, column letters, and row numbers. Previews show saved cell values without recalculating formulas or running macros. Inputs are limited to 20 MiB; previews are bounded to 20 sheets, 200 rows and 50 columns per sheet, and 512 KiB of displayed text. Shortened previews are labeled. Charts, images, and original cell formatting remain available in the download.
+
+PowerPoint `.ppt` and `.pptx` previews preserve slide layouts, images, and charts by rendering a temporary PDF locally. Use the slide controls, zoom, or text view to browse it. Fonts may be substituted; animations and embedded media are available in the downloaded presentation. Inputs are limited to 20 MiB and 500 slides, with a 90-second rendering limit and a 100 MiB output limit. Hidden slides and speaker notes are excluded. Encrypted, damaged, or unusually complex files may require downloading instead.
+
+### Enable PowerPoint previews
+
+The separate renderer needs additional disk space for LibreOffice and fonts, and has a 1 GiB memory limit with 512 MiB of temporary space within that limit. Allow at least 3 GiB of guest RAM for Harbor, the renderer, and the OS. The first build takes longer while these packages are installed. Excel previews do not require this service.
+
+For a Linux deployment, add this line to your existing `.env` file (keep your current hostname, storage, and other settings):
+
+```dotenv
+COMPOSE_FILE=compose.yaml:compose.previews.yaml
+```
+
+Then rebuild and start just the app and renderer:
+
+```sh
+docker compose up -d --build renderer app
+```
+
+Wait for `docker compose ps` to show the renderer healthy before opening a presentation. Future Compose commands will include the overlay automatically through `COMPOSE_FILE`. If you already use additional Compose files, keep them in the list and append `compose.previews.yaml`. Docker documents the [Compose file environment variable](https://docs.docker.com/compose/how-tos/environment-variables/envvars/#compose_file).
+
+The overlay leaves your existing Caddy service and port configuration unchanged. It adds a Unix socket shared only with Harbor: the renderer has no network interface, published port, or access to the account database or stored-file directories. Each conversion uses fresh temporary storage, disables macros and link updates, and deletes its temporary files when finished or canceled. Generated previews are authenticated and never cached on disk.
+
+For a local or WSL evaluation using `compose.local.yaml`, include both files explicitly in each Compose command, for example:
+
+```sh
+docker compose -f compose.local.yaml -f compose.previews.yaml up -d --build
+```
+
+For native Node development without the renderer service, Excel and the existing previews still work; opening a PowerPoint file shows a message explaining that slide rendering needs to be enabled.
+
 Use **Dark mode** at the top right or on the login screen. Harbor starts with your system preference and remembers an explicit choice in that browser.
 
 ### Administration and storage
@@ -220,7 +254,7 @@ Default development address: `http://localhost:3000`. Runtime environment variab
 | `app` is unhealthy and Caddy cannot start | Read `docker compose logs --tail=80 app` and `docker inspect --format '{{json .State.Health}}' harbor-app-1`. Run `docker compose run --rm --no-deps -T app node admin.js check` to check the current configuration and directory write access. Startup also checks registered storage folders and mount identities. The health check uses internal HTTP and does not depend on public DNS or HTTPS. |
 | App cannot write storage | The error identifies the runtime UID/GID and which guest mount setting to check. Ensure both selected paths exist and are writable as UID/GID 1000 inside the Linux guest; inspect Proxmox UID mapping if guest-side ownership cannot be changed. A read-only mount or full disk needs its own correction. |
 | Storage marker or mount error | Restore the correct mounted directory, including hidden `.harbor-location.json` markers. Do not erase markers or initialize a replacement over missing data. |
-| Word or PDF preview unavailable | Check format and size limits; encrypted, damaged, or unsupported documents remain downloadable. |
+| Document preview unavailable | Check format and size limits; encrypted, damaged, or unsupported documents remain downloadable. For PowerPoint, include `compose.previews.yaml` and check `docker compose ps` and `docker compose logs --tail=50 renderer`. |
 | HTTPS certificate fails | DNS points to the guest's public address, ports 80/443 reach Caddy, IPv6 is correct, and no other service occupies the ports. |
 | Login fails or writes return Forbidden | Browse the exact configured hostname and scheme. Verify `APP_ORIGIN` and avoid mixing `localhost` with `127.0.0.1`. |
 | Login temporarily blocked | Wait for the retry time shown on the form. Successful sign-ins do not use the failed-password allowance. Console password recovery clears old-password failure lockouts while retaining short burst protection. Verify the username's exact capitalization and trusted proxy client-IP configuration. |

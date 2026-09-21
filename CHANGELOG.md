@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preview Excel workbooks with worksheet selection and readable saved cell values.
+- Preview PowerPoint slides with layout, images, charts, zoom, and text view through an optional isolated local renderer.
+- Distinguish file types with muted pastel icons in light and dark themes, including documents, spreadsheets, PDFs, and presentations.
+
 - Keep the account setup username prompt visible when readline redraws the terminal.
 - Exit account setup and password recovery cleanly on Ctrl+C or end of input, with terminal state restored and no unsettled-await warning.
 - Check configuration and storage write access before prompting to create an owner; add a noninteractive `admin.js check` command and actionable mount-permission errors.
