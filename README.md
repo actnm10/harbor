@@ -297,3 +297,7 @@ Default development address: `http://localhost:3000`. Runtime environment variab
 | Upload fails | Check the per-file limit, total quota, physical free space, and duplicate names; retry a canceled file. |
 | Video has no picture or sound | The browser may not support its codecs; download and play it locally or convert it outside Harbor. |
 | Caddy shows 502 | Check the app's health and logs; the app stays stopped while a backup archive is created. |
+
+## License
+
+Harbor's original code and documentation are licensed under the [MIT License](LICENSE). Third-party components retain their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md) and their accompanying license files.
